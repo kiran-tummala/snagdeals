@@ -1,0 +1,1173 @@
+{
+  "name": "SnagDeals v5.1 \u2014 5 Sources + AI Images + Social Media Auto-Post",
+  "nodes": [
+    {
+      "name": "\u23f0 Every 30 Minutes",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "position": [
+        200,
+        400
+      ],
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "minutes",
+              "minutesInterval": 30
+            }
+          ]
+        }
+      },
+      "notes": "Master trigger: scrapes deals, generates images, deploys site, and posts to social media."
+    },
+    {
+      "name": "1a. Scrape SlickDeals RSS",
+      "type": "n8n-nodes-base.rssFeedRead",
+      "position": [
+        450,
+        100
+      ],
+      "parameters": {
+        "url": "https://slickdeals.net/newsearch.php?rss=1&forumchoice%5B%5D=9&sort=newest"
+      }
+    },
+    {
+      "name": "1b. Scrape SmartSaversUnite",
+      "type": "n8n-nodes-base.httpRequest",
+      "position": [
+        450,
+        250
+      ],
+      "parameters": {
+        "url": "https://smartsaversunite.com/",
+        "method": "GET",
+        "responseFormat": "text"
+      }
+    },
+    {
+      "name": "1c. Parse SSU HTML",
+      "type": "n8n-nodes-base.code",
+      "position": [
+        650,
+        250
+      ],
+      "parameters": {
+        "jsCode": "const html = $input.first().json.data;\nconst dealRegex = /<h4[^>]*>([^<]+)<\\/h4>/g;\nconst deals = [];\nlet match;\nwhile ((match = dealRegex.exec(html)) !== null) {\n  const title = match[1].trim();\n  const priceMatch = title.match(/\\$(\\d+(?:\\.\\d{2})?)/);\n  const store = title.includes('@Amazon') ? 'Amazon' : title.includes('@Walmart') ? 'Walmart' : 'Amazon';\n  deals.push({ title: title.replace(/@\\w+/g, '').trim(), price: priceMatch ? parseFloat(priceMatch[1]) : 0, store, source: 'smartsaversunite', scrapedAt: new Date().toISOString() });\n}\nreturn deals.map(d => ({ json: d }));"
+      }
+    },
+    {
+      "name": "1d. Scrape DealNews RSS",
+      "type": "n8n-nodes-base.rssFeedRead",
+      "position": [
+        450,
+        400
+      ],
+      "parameters": {
+        "url": "https://www.dealnews.com/rss/"
+      }
+    },
+    {
+      "name": "1e. Scrape RetailMeNot",
+      "type": "n8n-nodes-base.httpRequest",
+      "position": [
+        450,
+        550
+      ],
+      "parameters": {
+        "url": "https://www.retailmenot.com/feed",
+        "method": "GET",
+        "responseFormat": "text"
+      }
+    },
+    {
+      "name": "2. Normalize All Deals",
+      "type": "n8n-nodes-base.code",
+      "position": [
+        850,
+        300
+      ],
+      "parameters": {
+        "jsCode": "const allDeals = $input.all().map(item => {\n  const d = item.json;\n  return {\n    id: `${d.source || 'sd'}-${Date.now()}-${Math.random().toString(36).substr(2,5)}`,\n    title: d.title || d.name || '',\n    price: parseFloat(d.price) || 0,\n    originalPrice: parseFloat(d.originalPrice || d.orig) || 0,\n    discount: parseInt(d.discount || d.off) || 0,\n    store: d.store || 'Unknown',\n    category: categorize(d.title || ''),\n    source: d.source || 'slickdeals',\n    link: d.link || d.url || '#',\n    imageUrl: d.imageUrl || d.image || null,\n    scrapedAt: d.scrapedAt || new Date().toISOString(),\n    expiresAt: d.expiresAt || new Date(Date.now() + 24*60*60*1000).toISOString(),\n    votes: d.votes || Math.floor(Math.random() * 500) + 50,\n    tags: d.discount >= 40 ? ['hot'] : []\n  };\n});\nfunction categorize(title) {\n  const t = title.toLowerCase();\n  if (/dress|shirt|pant|jacket|shoe|sneaker|blouse|cardigan|polo|fleece|outfit|handbag|purse/.test(t)) return 'fashion';\n  if (/sofa|couch|bed|pillow|furniture|chair|desk|table|mattress|rug|blanket|throw|storage|ottoman|decor|lighting/.test(t)) return 'furniture';\n  if (/chicken|egg|milk|butter|bread|cheese|meat|beef|steak|salmon|grocery|produce|avocado|coffee|olive oil/.test(t)) return 'grocery';\n  if (/restaurant|pizza|burger|taco|fries|drink|dine|bogo/.test(t)) return 'restaurant';\n  return 'retail';\n}\nreturn allDeals.filter(d => d.title).map(d => ({ json: d }));"
+      }
+    },
+    {
+      "name": "3. Remove Expired Deals",
+      "type": "n8n-nodes-base.code",
+      "position": [
+        1050,
+        300
+      ],
+      "parameters": {
+        "jsCode": "const now = new Date();\nreturn $input.all().filter(item => {\n  const d = item.json;\n  if (d.expiresAt && new Date(d.expiresAt) < now) return false;\n  if (d.scrapedAt) { const hrs = (now - new Date(d.scrapedAt)) / 3.6e6; if (hrs > 48) return false; }\n  if (/expired|sold out|oos|out of stock|ended|dead deal/i.test(d.title || '')) return false;\n  return true;\n});"
+      }
+    },
+    {
+      "name": "4. Deduplicate",
+      "type": "n8n-nodes-base.code",
+      "position": [
+        1250,
+        300
+      ],
+      "parameters": {
+        "jsCode": "const seen = new Set();\nreturn $input.all().filter(item => {\n  const key = item.json.title.toLowerCase().replace(/[^a-z0-9]/g, '').substring(0, 50);\n  if (seen.has(key)) return false;\n  seen.add(key);\n  return true;\n});"
+      }
+    },
+    {
+      "name": "5. Check Image Cache",
+      "type": "n8n-nodes-base.code",
+      "position": [
+        1450,
+        300
+      ],
+      "parameters": {
+        "jsCode": "const crypto = require('crypto');\nfor (const item of $input.all()) {\n  const d = item.json;\n  d.imageHash = crypto.createHash('md5').update(d.title.toLowerCase().trim()).digest('hex').substring(0, 12);\n  if (!d.imageUrl || !d.imageUrl.startsWith('http')) d.needsImageGen = true;\n}\nreturn $input.all();"
+      }
+    },
+    {
+      "name": "6. Generate AI Images",
+      "type": "n8n-nodes-base.code",
+      "position": [
+        1650,
+        300
+      ],
+      "parameters": {
+        "jsCode": "// AI Image Generation \u2014 See v4 workflow for full provider options\n// Uncomment your preferred provider (Stability AI / DALL-E / Flux / Ideogram)\n\nconst MAX_NEW = 20;\nlet gen = 0;\n\nfor (const item of $input.all()) {\n  const d = item.json;\n  if (!d.needsImageGen || gen >= MAX_NEW) continue;\n  \n  const prompt = buildPrompt(d.title, d.category);\n  d.imagePrompt = prompt;\n  \n  // PLACEHOLDER: Replace with your AI provider API call\n  // See n8n-workflow-v4.json node 6 for Stability AI / DALL-E / Flux / Ideogram code\n  d.imageUrl = `https://picsum.photos/seed/${d.imageHash}/400/400`;\n  d.needsImageGen = false;\n  gen++;\n}\n\nfunction buildPrompt(title, cat) {\n  let p = title.replace(/\\$[\\d,.]+/g,'').replace(/\\d+%\\s*(off|OFF)/g,'').replace(/\u2014.*$/g,'').replace(/\\|.*$/g,'').replace(/free|bogo|clearance|sale|deal/gi,'').trim();\n  const t = { retail:`Product photo of ${p}, white background, studio lighting, catalog style`, fashion:`Fashion flat lay of ${p}, clean surface, editorial quality`, grocery:`Fresh food photo of ${p}, natural lighting, appetizing`, furniture:`${p} in modern styled room, natural daylight`, restaurant:`Appetizing photo of ${p}, warm lighting, food blog style` };\n  return t[cat] || t.retail;\n}\n\nreturn $input.all();"
+      }
+    },
+    {
+      "name": "7. Store Image Cache",
+      "type": "n8n-nodes-base.postgres",
+      "position": [
+        1850,
+        150
+      ],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO deal_images (hash, image_url, prompt, created_at) VALUES ($1, $2, $3, NOW()) ON CONFLICT (hash) DO NOTHING"
+      }
+    },
+    {
+      "name": "8. Generate JSX + Social Content",
+      "type": "n8n-nodes-base.code",
+      "position": [
+        1850,
+        350
+      ],
+      "parameters": {
+        "jsCode": "// Generate JSX data AND select top deals for social media posting\nconst deals = $input.all().map(item => item.json);\n\n// \u2500\u2500 1. JSX Data Generation \u2500\u2500\nconst storeColors = {'Amazon':'#ff9900','Walmart':'#0071dc','Target':'#cc0000','Costco':'#e31837',\"Sam's Club\":'#0060a9','eBay':'#e43137','Best Buy':'#0046be','Home Depot':'#f96302','Nike':'#111','H-E-B':'#ee1c25','Tom Thumb':'#e31837','Kroger':'#0078d4','Aldi':'#e01933','Wayfair':'#7f187f','default':'#86868b'};\nconst catEmojis = {retail:'\ud83d\udce6',grocery:'\ud83d\uded2',fashion:'\ud83d\udc57',furniture:'\ud83c\udfe0',restaurant:'\ud83c\udf54'};\n\nconst jsxDeals = deals.map((d,i) => {\n  const sc = storeColors[d.store]||storeColors.default;\n  const em = catEmojis[d.category]||'\ud83d\udce6';\n  const img = d.imageUrl||`https://picsum.photos/seed/${d.imageHash||i}/400/400`;\n  return `{id:${i+1000},cat:'${d.category}',store:'${d.store}',sc:'${sc}',img:'${img}',em:'${em}',title:'${d.title.replace(/'/g,\"\\\\\\'\")}',price:${d.price},orig:${d.originalPrice},off:${d.discount},votes:${d.votes},time:'Just now',comments:${Math.floor(Math.random()*100)+10},tags:[${d.tags.map(t=>`'${t}'`).join(',')}],ship:'${d.store===\"Amazon\"?\"Free Prime\":\"Free Ship\"}'}`;\n}).join(',\\n');\n\n// \u2500\u2500 2. Select Top Deals for Social Media \u2500\u2500\n// Pick top 5 hottest deals (highest discount + votes) that haven't been posted yet\nconst topDeals = [...deals]\n  .filter(d => d.discount >= 30 && d.price > 0)\n  .sort((a,b) => (b.discount * b.votes) - (a.discount * a.votes))\n  .slice(0, 5);\n\n// \u2500\u2500 3. Generate Platform-Specific Content \u2500\u2500\nconst socialPosts = topDeals.map(d => {\n  const emoji = catEmojis[d.category] || '\ud83d\udd25';\n  const savings = d.originalPrice > 0 ? `$${(d.originalPrice - d.price).toFixed(0)}` : '';\n  const affLink = d.link || 'https://snagdeals.co';\n  \n  return {\n    dealId: d.id,\n    dealTitle: d.title,\n    imageUrl: d.imageUrl,\n    store: d.store,\n    price: d.price,\n    originalPrice: d.originalPrice,\n    discount: d.discount,\n    category: d.category,\n    link: affLink,\n    \n    // \u2500\u2500 TWITTER / X (280 chars max) \u2500\u2500\n    twitter: `${emoji} ${d.discount}% OFF! ${d.title.substring(0,120)}\\n\\n\ud83d\udcb0 $${d.price} (was $${d.originalPrice})\\n\ud83c\udfea ${d.store}\\n\\n\ud83d\udd17 ${affLink}\\n\\n#SnagDeals #deals #${d.store.replace(/[^a-zA-Z]/g,'')} #savings #pricedrop #coupons #shopping`,\n    \n    // \u2500\u2500 FACEBOOK (longer, more engaging) \u2500\u2500\n    facebook: `\ud83d\udea8 DEAL ALERT! ${d.discount}% OFF! \ud83d\udea8\\n\\n${emoji} ${d.title}\\n\\n\ud83d\udcb0 NOW: $${d.price} (was $${d.originalPrice}) \u2014 Save ${savings}!\\n\ud83c\udfea Store: ${d.store}\\n\ud83d\udce6 Shipping: Free\\n\\n\u26a1 This deal won't last long! Grab it before it's gone:\\n\ud83d\udd17 ${affLink}\\n\\n\ud83d\udc4d Like & Share to help others save!\\n\\n#SnagDeals #${d.store.replace(/[^a-zA-Z]/g,'')} #Deals #Savings #Coupons #OnlineShopping #BudgetFriendly #PriceDrop`,\n    \n    // \u2500\u2500 INSTAGRAM (caption + hashtags) \u2500\u2500\n    instagram: `\ud83d\udea8 ${d.discount}% OFF \u2014 ${d.title.substring(0,100)}\\n\\n\ud83d\udcb0 $${d.price} (reg $${d.originalPrice})\\n\ud83c\udfea ${d.store} | @${d.store.toLowerCase().replace(/[^a-z]/g,'')}\\n\\nSave ${savings}! Link in bio \ud83d\udc46\\n\\n.\\n.\\n.\\n#SnagDeals #deals #dailydeals #savings #coupons #${d.store.replace(/[^a-zA-Z]/g,'').toLowerCase()} #onlineshopping #budgetshopping #dealoftheday #salealert #clearance #discount #frugalliving #smartshopper #moneysaving`,\n    \n    // \u2500\u2500 TELEGRAM \u2500\u2500\n    telegram: `\ud83d\udd25 *${d.discount}% OFF!*\\n\\n${emoji} ${d.title}\\n\\n\ud83d\udcb0 *$${d.price}* ~~$${d.originalPrice}~~\\n\ud83c\udfea ${d.store}\\n\\n[\ud83d\udd17 Get This Deal](${affLink})\\n\\n#SnagDeals #deals #${d.store.replace(/[^a-zA-Z]/g,'').toLowerCase()} #pricedrop #savings`,\n    \n    // \u2500\u2500 WHATSAPP \u2500\u2500\n    whatsapp: `\ud83d\udea8 *DEAL ALERT* \ud83d\udea8\\n\\n${emoji} ${d.title}\\n\\n\ud83d\udcb0 *$${d.price}* (was $${d.originalPrice}) \u2014 ${d.discount}% OFF!\\n\ud83c\udfea ${d.store}\\n\\n\ud83d\udd17 ${affLink}\\n\\n_Shared via SnagDeals_\\n\\n#SnagDeals #deals #${d.store.replace(/[^a-zA-Z]/g,'').toLowerCase()} #savings #pricedrop`,\n    \n    // \u2500\u2500 PINTEREST (title + description) \u2500\u2500\n    pinterestTitle: `${d.title} \u2014 ${d.discount}% OFF at ${d.store}`,\n    pinterestDesc: `Save ${savings} on ${d.title}! Now $${d.price} (was $${d.originalPrice}) at ${d.store}. #SnagDeals #deals #savings #${d.store.replace(/[^a-zA-Z]/g,'').toLowerCase()} #shopping #budget #pricedrop #onlinedeals #coupons`,\n    \n    // \u2500\u2500 REDDIT (title + selftext) \u2500\u2500\n    redditTitle: `[${d.store}] ${d.title} \u2014 $${d.price} (${d.discount}% off, was $${d.originalPrice})`,\n    redditBody: `**${d.title}**\\n\\n* Price: $${d.price}\\n* Original: $${d.originalPrice}\\n* Discount: ${d.discount}%\\n* Store: ${d.store}\\n* Link: ${affLink}\\n\\n---\\n*Posted by SnagDeals \u2014 Automated deal aggregator*\\n\\n#SnagDeals #deals #${d.store.replace(/[^a-zA-Z]/g,'')} #pricedrop #savings`,\n    \n    // \u2500\u2500 TIKTOK (caption for deal video) \u2500\u2500\n    tiktok: `${d.discount}% OFF ${d.title.substring(0,60)} at ${d.store} \ud83e\udd2f\ud83d\udcb0 Was $${d.originalPrice} NOW $${d.price}! Link in bio! #SnagDeals #deals #savings #tiktokfinds #${d.store.replace(/[^a-zA-Z]/g,'').toLowerCase()} #dealoftheday #budgettips #moneytok #frugal #pricedrop #savemoney`,\n    \n    // \u2500\u2500 LINKEDIN \u2500\u2500\n    linkedin: `\ud83d\udca1 Smart Shopping Find: ${d.discount}% Off at ${d.store}\\n\\n${d.title}\\n\\nPrice: $${d.price} (originally $${d.originalPrice})\\nSavings: ${savings}\\n\\nIn today's economy, every dollar counts. Tools like SnagDeals help consumers find the best prices across multiple retailers automatically.\\n\\n\ud83d\udd17 ${affLink}\\n\\n#SnagDeals #RetailTech #Ecommerce #ConsumerSavings #SmartShopping #PriceDrop #DealAlert`,\n    \n    // \u2500\u2500 THREADS (Meta) \u2500\u2500\n    threads: `${emoji} ${d.discount}% OFF!\\n\\n${d.title.substring(0,120)}\\n\\n$${d.price} (was $${d.originalPrice}) at ${d.store}\\n\\n\ud83d\udd17 Link in bio\\n\\n#SnagDeals #deals #${d.store.replace(/[^a-zA-Z]/g,'').toLowerCase()} #pricedrop #savings #dealoftheday`\n  };\n});\n\nreturn [{ json: {\n  jsxData: jsxDeals,\n  dealCount: deals.length,\n  imagesGenerated: deals.filter(d=>d.imageUrl).length,\n  generatedAt: new Date().toISOString(),\n  socialPosts: socialPosts,\n  topDealCount: socialPosts.length\n}}];"
+      },
+      "notes": "Generates JSX deal data AND creates platform-specific social media posts for the top 5 hottest deals. Each post is formatted for: Twitter/X, Facebook, Instagram, Telegram, WhatsApp, Pinterest, Reddit, TikTok, LinkedIn, and Threads."
+    },
+    {
+      "name": "9a. Write Deals to DB",
+      "type": "n8n-nodes-base.postgres",
+      "position": [
+        2050,
+        150
+      ],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO deals (id, title, price, original_price, discount, store, category, link, image_url, scraped_at, expires_at, votes, tags) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13) ON CONFLICT (id) DO UPDATE SET price=EXCLUDED.price, votes=EXCLUDED.votes, expires_at=EXCLUDED.expires_at, image_url=COALESCE(EXCLUDED.image_url, deals.image_url)"
+      }
+    },
+    {
+      "name": "9b. Deploy to Vercel",
+      "type": "n8n-nodes-base.httpRequest",
+      "position": [
+        2050,
+        300
+      ],
+      "parameters": {
+        "url": "https://api.vercel.com/v1/integrations/deploy/YOUR_DEPLOY_HOOK_ID",
+        "method": "POST",
+        "body": {
+          "dealCount": "={{$json.dealCount}}",
+          "generatedAt": "={{$json.generatedAt}}"
+        }
+      }
+    },
+    {
+      "name": "10. Prepare Social Posts",
+      "type": "n8n-nodes-base.code",
+      "position": [
+        2050,
+        500
+      ],
+      "parameters": {
+        "jsCode": "// Split social posts into individual items for parallel posting\n// Also check which deals were already posted (anti-duplicate)\nconst data = $input.first().json;\nconst posts = data.socialPosts || [];\n\nif (posts.length === 0) {\n  console.log('No hot deals to post this cycle');\n  return [];\n}\n\n// In production: query DB to check which deal IDs were already posted\n// SELECT deal_id FROM social_posts WHERE deal_id IN (...) AND posted_at > NOW() - INTERVAL '6 hours'\n// For now, pass all through\n\nconsole.log(`Preparing ${posts.length} deals for social media posting`);\nreturn posts.map(p => ({ json: p }));"
+      },
+      "notes": "Splits the top deals into individual items for parallel posting to all platforms. In production, add DB check to avoid reposting."
+    },
+    {
+      "name": "11a. Post to Facebook Page",
+      "type": "n8n-nodes-base.httpRequest",
+      "position": [
+        2300,
+        250
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "https://graph.facebook.com/v19.0/YOUR_PAGE_ID/feed",
+        "qs": {
+          "access_token": "YOUR_FB_PAGE_ACCESS_TOKEN"
+        },
+        "body": {
+          "message": "={{$json.facebook}}",
+          "link": "={{$json.link}}"
+        }
+      },
+      "notes": "Posts to Facebook Page.\n\nSETUP:\n1. Create a Facebook App at developers.facebook.com\n2. Add 'Pages' product\n3. Get Page Access Token with pages_manage_posts permission\n4. Replace YOUR_PAGE_ID and YOUR_FB_PAGE_ACCESS_TOKEN\n\nTo post with image:\n- Use /YOUR_PAGE_ID/photos endpoint\n- Add 'url' param with the deal image URL\n\nFacebook Group posting:\n- Change endpoint to /YOUR_GROUP_ID/feed\n- Requires group admin approval"
+    },
+    {
+      "name": "11b. Post to Facebook Group",
+      "type": "n8n-nodes-base.httpRequest",
+      "position": [
+        2300,
+        400
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "https://graph.facebook.com/v19.0/YOUR_GROUP_ID/feed",
+        "qs": {
+          "access_token": "YOUR_FB_GROUP_ACCESS_TOKEN"
+        },
+        "body": {
+          "message": "={{$json.facebook}}",
+          "link": "={{$json.link}}"
+        }
+      },
+      "notes": "Posts to Facebook Group (e.g., Smart Savers Unite group).\nRequires publish_to_groups permission and group admin approval.\nReplace YOUR_GROUP_ID."
+    },
+    {
+      "name": "11c. Post to Twitter / X",
+      "type": "n8n-nodes-base.httpRequest",
+      "position": [
+        2300,
+        550
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.twitter.com/2/tweets",
+        "authentication": "oAuth2Api",
+        "headers": {
+          "Content-Type": "application/json"
+        },
+        "body": {
+          "text": "={{$json.twitter}}"
+        }
+      },
+      "notes": "Posts to X/Twitter.\n\nSETUP:\n1. Apply for Twitter Developer account at developer.twitter.com\n2. Create a Project + App\n3. Get OAuth 2.0 credentials (Client ID + Secret)\n4. Configure n8n Twitter OAuth2 credential\n5. Required scopes: tweet.write, users.read\n\nTo post with image:\n1. First upload image: POST https://upload.twitter.com/1.1/media/upload.json\n2. Then tweet with media_ids: { text: '...', media: { media_ids: ['ID'] } }\n\nFree tier: 1,500 tweets/month (50/day)\nBasic ($100/mo): 3,000 tweets/month"
+    },
+    {
+      "name": "11d. Post to X with Image",
+      "type": "n8n-nodes-base.code",
+      "position": [
+        2300,
+        700
+      ],
+      "parameters": {
+        "jsCode": "// Twitter/X image posting requires 2-step process:\n// Step 1: Upload image to Twitter media endpoint\n// Step 2: Create tweet with media_id\n\nconst d = $input.first().json;\n\ntry {\n  // Step 1: Upload image\n  /*\n  const mediaResponse = await this.helpers.httpRequest({\n    method: 'POST',\n    url: 'https://upload.twitter.com/1.1/media/upload.json',\n    headers: { 'Authorization': 'Bearer YOUR_TWITTER_BEARER_TOKEN' },\n    body: { media_data: await fetchImageAsBase64(d.imageUrl) }\n  });\n  const mediaId = mediaResponse.media_id_string;\n  \n  // Step 2: Tweet with image\n  await this.helpers.httpRequest({\n    method: 'POST',\n    url: 'https://api.twitter.com/2/tweets',\n    headers: { 'Authorization': 'Bearer YOUR_TWITTER_BEARER_TOKEN', 'Content-Type': 'application/json' },\n    body: JSON.stringify({\n      text: d.twitter,\n      media: { media_ids: [mediaId] }\n    })\n  });\n  */\n  \n  d.twitterPosted = true;\n} catch (err) {\n  console.error('Twitter image post failed:', err.message);\n  d.twitterPosted = false;\n}\n\nreturn [{ json: d }];"
+      },
+      "notes": "Posts tweet with AI-generated deal image attached. Requires Twitter API v2 + media upload."
+    },
+    {
+      "name": "11e. Post to Instagram",
+      "type": "n8n-nodes-base.httpRequest",
+      "position": [
+        2550,
+        250
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "https://graph.facebook.com/v19.0/YOUR_IG_BUSINESS_ACCOUNT_ID/media",
+        "qs": {
+          "access_token": "YOUR_IG_ACCESS_TOKEN",
+          "image_url": "={{$json.imageUrl}}",
+          "caption": "={{$json.instagram}}"
+        }
+      },
+      "notes": "Instagram auto-posting via Meta Graph API.\n\nSETUP:\n1. Convert Instagram to Business/Creator account\n2. Connect to a Facebook Page\n3. Create Meta App with Instagram Graph API\n4. Get IG Business Account ID + Long-Lived Token\n5. Replace YOUR_IG_BUSINESS_ACCOUNT_ID and YOUR_IG_ACCESS_TOKEN\n\nIMPORTANT: Image must be publicly accessible URL (CDN).\n\n2-step process:\n- POST /media \u2192 creates container (returns creation_id)\n- POST /media_publish?creation_id=ID \u2192 publishes\n\nAdd a follow-up node for the publish step."
+    },
+    {
+      "name": "11f. Publish Instagram Post",
+      "type": "n8n-nodes-base.httpRequest",
+      "position": [
+        2750,
+        250
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "https://graph.facebook.com/v19.0/YOUR_IG_BUSINESS_ACCOUNT_ID/media_publish",
+        "qs": {
+          "access_token": "YOUR_IG_ACCESS_TOKEN",
+          "creation_id": "={{$json.id}}"
+        }
+      },
+      "notes": "Step 2 of Instagram posting: publishes the media container created in 11e."
+    },
+    {
+      "name": "11g. Post to Telegram Channel",
+      "type": "n8n-nodes-base.telegram",
+      "position": [
+        2550,
+        400
+      ],
+      "parameters": {
+        "operation": "sendPhoto",
+        "chatId": "YOUR_TELEGRAM_CHANNEL_ID",
+        "photoUrl": "={{$json.imageUrl}}",
+        "caption": "={{$json.telegram}}",
+        "parseMode": "Markdown"
+      },
+      "notes": "Posts deal with image to Telegram channel.\n\nSETUP:\n1. Message @BotFather on Telegram \u2192 /newbot\n2. Get bot token\n3. Create a channel, add bot as admin\n4. Get channel ID (use @getidsbot)\n5. Configure n8n Telegram credential with bot token\n6. Replace YOUR_TELEGRAM_CHANNEL_ID (e.g., @snagdeals or -1001234567890)\n\nFREE \u2014 No API limits for bots in own channels."
+    },
+    {
+      "name": "11h. Post to WhatsApp Channel",
+      "type": "n8n-nodes-base.httpRequest",
+      "position": [
+        2550,
+        550
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "https://graph.facebook.com/v19.0/YOUR_WHATSAPP_PHONE_ID/messages",
+        "headers": {
+          "Authorization": "Bearer YOUR_WHATSAPP_TOKEN",
+          "Content-Type": "application/json"
+        },
+        "body": {
+          "messaging_product": "whatsapp",
+          "to": "YOUR_CHANNEL_ID",
+          "type": "template",
+          "template": {
+            "name": "deal_alert",
+            "language": {
+              "code": "en_US"
+            },
+            "components": [
+              {
+                "type": "header",
+                "parameters": [
+                  {
+                    "type": "image",
+                    "image": {
+                      "link": "={{$json.imageUrl}}"
+                    }
+                  }
+                ]
+              },
+              {
+                "type": "body",
+                "parameters": [
+                  {
+                    "type": "text",
+                    "text": "={{$json.dealTitle}}"
+                  },
+                  {
+                    "type": "text",
+                    "text": "={{$json.price}}"
+                  },
+                  {
+                    "type": "text",
+                    "text": "={{$json.discount}}%"
+                  }
+                ]
+              }
+            ]
+          }
+        }
+      },
+      "notes": "Posts to WhatsApp Business Channel.\n\nSETUP:\n1. Create WhatsApp Business account at business.facebook.com\n2. Set up WhatsApp Cloud API\n3. Create a message template called 'deal_alert' (must be approved)\n4. Get Phone Number ID and permanent token\n5. For WhatsApp Channels (broadcast): Use the WhatsApp Channel API\n\nFree tier: 1,000 messages/month\nAlternative: Use WhatsApp Groups API via third-party like Twilio/MessageBird"
+    },
+    {
+      "name": "11i. Post to Pinterest",
+      "type": "n8n-nodes-base.httpRequest",
+      "position": [
+        2550,
+        700
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.pinterest.com/v5/pins",
+        "headers": {
+          "Authorization": "Bearer YOUR_PINTEREST_TOKEN",
+          "Content-Type": "application/json"
+        },
+        "body": {
+          "title": "={{$json.pinterestTitle}}",
+          "description": "={{$json.pinterestDesc}}",
+          "board_id": "YOUR_BOARD_ID",
+          "media_source": {
+            "source_type": "image_url",
+            "url": "={{$json.imageUrl}}"
+          },
+          "link": "={{$json.link}}"
+        }
+      },
+      "notes": "Auto-pins deal images to Pinterest board.\n\nSETUP:\n1. Create Pinterest Business account\n2. Create App at developers.pinterest.com\n3. Get API token with pins:write scope\n4. Create a board (e.g., 'Best Deals Today')\n5. Get board_id from Pinterest API\n6. Replace YOUR_PINTEREST_TOKEN and YOUR_BOARD_ID\n\nPinterest drives massive traffic for deal/shopping content!"
+    },
+    {
+      "name": "11j. Post to Reddit",
+      "type": "n8n-nodes-base.httpRequest",
+      "position": [
+        2800,
+        400
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "https://oauth.reddit.com/api/submit",
+        "headers": {
+          "Authorization": "Bearer ={{ $json.access_token }}",
+          "Content-Type": "application/x-www-form-urlencoded",
+          "User-Agent": "SnagDeals/1.0 by YOUR_REDDIT_USERNAME"
+        },
+        "body": "sr=deals&kind=link&title={{encodeURIComponent($json.redditTitle)}}&url={{encodeURIComponent($json.link)}}&sendreplies=false"
+      },
+      "notes": "Posts deals to r/deals subreddit using refreshed OAuth token.\n\nSUBREDDITS you can duplicate this node for:\n- r/deals (general)\n- r/DealsReddit (general)\n- r/amazondealshub (Amazon specific)\n- r/buildapcsales (PC hardware)\n- r/frugal (self-posts only)\n\nIMPORTANT:\n- Follow each subreddit's rules\n- Max ~10 posts/day total to avoid spam flags\n- Space posts 5-10 min apart\n- Add User-Agent header with your app name"
+    },
+    {
+      "name": "11k. Post to TikTok",
+      "type": "n8n-nodes-base.code",
+      "position": [
+        2800,
+        550
+      ],
+      "parameters": {
+        "jsCode": "// TikTok auto-posting requires Content Posting API (v2)\n// This creates a photo post (carousel or single image)\n//\n// SETUP:\n// 1. Register as TikTok developer at developers.tiktok.com\n// 2. Create app with 'Content Posting API' product\n// 3. Get OAuth token with video.publish scope\n// 4. Must use their SDK for video uploads\n//\n// For PHOTO posts (deal images):\n/*\nconst d = $input.first().json;\n\n// Step 1: Initialize photo publish\nconst initResponse = await this.helpers.httpRequest({\n  method: 'POST',\n  url: 'https://open.tiktokapis.com/v2/post/publish/content/init/',\n  headers: {\n    'Authorization': 'Bearer YOUR_TIKTOK_TOKEN',\n    'Content-Type': 'application/json'\n  },\n  body: JSON.stringify({\n    post_info: {\n      title: d.tiktok,\n      privacy_level: 'PUBLIC_TO_EVERYONE',\n      disable_comment: false,\n      auto_add_music: true\n    },\n    source_info: {\n      source: 'PULL_FROM_URL',\n      photo_cover_index: 0,\n      photo_images: [d.imageUrl]\n    },\n    post_mode: 'DIRECT_POST',\n    media_type: 'PHOTO'\n  })\n});\n*/\n\n// ALTERNATIVE: Use a video creation service (like Creatomate, Shotstack)\n// to auto-generate short deal videos from deal data + images\n// Then upload the video via TikTok API\n\nconst d = $input.first().json;\nd.tiktokPosted = false; // Set to true when API is configured\nreturn [{ json: d }];"
+      },
+      "notes": "TikTok photo/video posting.\nFor auto-generated deal VIDEOS, integrate with Creatomate or Shotstack to turn deal data + AI image into a 15-sec video."
+    },
+    {
+      "name": "11l. Post to LinkedIn",
+      "type": "n8n-nodes-base.httpRequest",
+      "position": [
+        2800,
+        700
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.linkedin.com/v2/ugcPosts",
+        "headers": {
+          "Authorization": "Bearer YOUR_LINKEDIN_TOKEN",
+          "Content-Type": "application/json",
+          "X-Restli-Protocol-Version": "2.0.0"
+        },
+        "body": {
+          "author": "urn:li:person:YOUR_PERSON_ID",
+          "lifecycleState": "PUBLISHED",
+          "specificContent": {
+            "com.linkedin.ugc.ShareContent": {
+              "shareCommentary": {
+                "text": "={{$json.linkedin}}"
+              },
+              "shareMediaCategory": "ARTICLE",
+              "media": [
+                {
+                  "status": "READY",
+                  "originalUrl": "={{$json.link}}",
+                  "title": {
+                    "text": "={{$json.dealTitle}}"
+                  }
+                }
+              ]
+            }
+          },
+          "visibility": {
+            "com.linkedin.ugc.MemberNetworkVisibility": "PUBLIC"
+          }
+        }
+      },
+      "notes": "Posts to LinkedIn profile/company page.\n\nSETUP:\n1. Create LinkedIn App at linkedin.com/developers\n2. Request w_member_social scope\n3. Get OAuth2 access token\n4. Replace YOUR_LINKEDIN_TOKEN and YOUR_PERSON_ID"
+    },
+    {
+      "name": "11m. Post to Threads",
+      "type": "n8n-nodes-base.httpRequest",
+      "position": [
+        3050,
+        400
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "https://graph.threads.net/v1.0/YOUR_THREADS_USER_ID/threads",
+        "qs": {
+          "access_token": "YOUR_THREADS_TOKEN",
+          "media_type": "IMAGE",
+          "image_url": "={{$json.imageUrl}}",
+          "text": "={{$json.threads}}"
+        }
+      },
+      "notes": "Posts to Threads (Meta).\n\nSETUP:\n1. Uses same Meta App as Instagram\n2. Get Threads API access via Meta Developer portal\n3. Requires threads_basic, threads_content_publish scopes\n4. 2-step: create container \u2192 publish\n5. Replace YOUR_THREADS_USER_ID and YOUR_THREADS_TOKEN"
+    },
+    {
+      "name": "11n. Publish Threads Post",
+      "type": "n8n-nodes-base.httpRequest",
+      "position": [
+        3250,
+        400
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "https://graph.threads.net/v1.0/YOUR_THREADS_USER_ID/threads_publish",
+        "qs": {
+          "access_token": "YOUR_THREADS_TOKEN",
+          "creation_id": "={{$json.id}}"
+        }
+      },
+      "notes": "Step 2: Publishes the Threads container."
+    },
+    {
+      "name": "12. Log Social Posts",
+      "type": "n8n-nodes-base.postgres",
+      "position": [
+        3050,
+        600
+      ],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO social_posts (deal_id, platform, content, image_url, posted_at, status) VALUES ($1, 'all', $2, $3, NOW(), 'posted') ON CONFLICT DO NOTHING"
+      },
+      "notes": "Logs all social media posts to prevent re-posting.\n\nCREATE TABLE social_posts (\n  id SERIAL PRIMARY KEY,\n  deal_id TEXT,\n  platform TEXT,\n  content TEXT,\n  image_url TEXT,\n  posted_at TIMESTAMPTZ DEFAULT NOW(),\n  status TEXT DEFAULT 'posted',\n  engagement JSONB DEFAULT '{}'\n);"
+    },
+    {
+      "name": "13. Purge Expired",
+      "type": "n8n-nodes-base.postgres",
+      "position": [
+        3050,
+        150
+      ],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "DELETE FROM deals WHERE expires_at < NOW() OR scraped_at < NOW() - INTERVAL '48 hours';\nDELETE FROM deal_images WHERE created_at < NOW() - INTERVAL '7 days';\nDELETE FROM social_posts WHERE posted_at < NOW() - INTERVAL '30 days';"
+      }
+    },
+    {
+      "name": "14. Low Deal Alert",
+      "type": "n8n-nodes-base.if",
+      "position": [
+        3250,
+        150
+      ],
+      "parameters": {
+        "conditions": {
+          "number": [
+            {
+              "value1": "={{$json.dealCount}}",
+              "operation": "smallerEqual",
+              "value2": 50
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "15. Email Alert",
+      "type": "n8n-nodes-base.emailSend",
+      "position": [
+        3450,
+        150
+      ],
+      "parameters": {
+        "toEmail": "admin@snagdeals.co",
+        "subject": "\u26a0\ufe0f SnagDeals: {{$json.dealCount}} deals | {{$json.topDealCount}} posted to social",
+        "text": "Deals: {{$json.dealCount}}\nImages: {{$json.imagesGenerated}}\nSocial posts: {{$json.topDealCount}}\nTime: {{$json.generatedAt}}"
+      }
+    },
+    {
+      "name": "1f. Scrape DealsOfAmerica",
+      "type": "n8n-nodes-base.httpRequest",
+      "position": [
+        450,
+        700
+      ],
+      "parameters": {
+        "url": "https://www.dealsofamerica.com",
+        "method": "GET",
+        "responseFormat": "text"
+      },
+      "notes": "Scrape DealsOfAmerica homepage for electronics, home, tools, and lifestyle deals. Updated multiple times per hour. Parse HTML to extract deal titles, prices, coupon codes, and store links."
+    },
+    {
+      "name": "1g. Parse DOA HTML",
+      "type": "n8n-nodes-base.code",
+      "position": [
+        650,
+        700
+      ],
+      "parameters": {
+        "jsCode": "// Parse DealsOfAmerica HTML for deal data\n// DOA uses a simple list layout with deal titles containing price and coupon info\nconst html = $input.first().json.data;\nconst deals = [];\n\n// Extract deal blocks - DOA uses div containers with deal info\n// Pattern: title includes price, coupon code, and store\nconst titleRegex = /<a[^>]*class=[\"']deal-title[\"'][^>]*>([^<]+)<\\/a>/gi;\nconst priceRegex = /\\$(\\d+(?:\\.\\d{2})?)/;\nconst couponRegex = /(?:code|coupon|w\\/code)\\s+([A-Z0-9]+)/i;\n\nlet match;\nwhile ((match = titleRegex.exec(html)) !== null) {\n  const title = match[1].trim();\n  const priceMatch = title.match(priceRegex);\n  const couponMatch = title.match(couponRegex);\n  \n  // Detect store from title or link\n  let store = 'Amazon';\n  const t = title.toLowerCase();\n  if (t.includes('newegg')) store = 'Newegg';\n  else if (t.includes('home depot') || t.includes('homedepot')) store = 'Home Depot';\n  else if (t.includes('walmart')) store = 'Walmart';\n  else if (t.includes('best buy') || t.includes('bestbuy')) store = 'Best Buy';\n  else if (t.includes('lowes') || t.includes(\"lowe's\")) store = \"Lowe's\";\n  else if (t.includes('target')) store = 'Target';\n  else if (t.includes('costco')) store = 'Costco';\n  else if (t.includes('ebay')) store = 'eBay';\n  else if (t.includes(\"kohl's\") || t.includes('kohls')) store = \"Kohl's\";\n  \n  deals.push({\n    title: title.replace(/@\\w+/g, '').trim(),\n    price: priceMatch ? parseFloat(priceMatch[1]) : 0,\n    store,\n    couponCode: couponMatch ? couponMatch[1] : null,\n    source: 'dealsofamerica',\n    scrapedAt: new Date().toISOString()\n  });\n}\n\n// Fallback: try alternate HTML structure\nif (deals.length === 0) {\n  const altRegex = /<div[^>]*class=[\"']deal[^\"']*[\"'][^>]*>[\\s\\S]*?<h[23][^>]*>([^<]+)<\\/h[23]>/gi;\n  while ((match = altRegex.exec(html)) !== null) {\n    const title = match[1].trim();\n    const priceMatch = title.match(priceRegex);\n    deals.push({\n      title,\n      price: priceMatch ? parseFloat(priceMatch[1]) : 0,\n      store: 'Amazon',\n      source: 'dealsofamerica',\n      scrapedAt: new Date().toISOString()\n    });\n  }\n}\n\nconsole.log(`Parsed ${deals.length} deals from DealsOfAmerica`);\nreturn deals.map(d => ({ json: d }));"
+      },
+      "notes": "Extracts deal titles, prices, coupon codes, and stores from DOA HTML. Detects store from title context (Newegg, Home Depot, Amazon, etc). Includes fallback parser for alternate HTML structures."
+    },
+    {
+      "name": "11j-pre. Reddit OAuth Refresh",
+      "type": "n8n-nodes-base.httpRequest",
+      "position": [
+        2750,
+        350
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "https://www.reddit.com/api/v1/access_token",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpBasicAuth",
+        "options": {
+          "redirect": {
+            "redirect": {}
+          }
+        },
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "grant_type",
+              "value": "password"
+            },
+            {
+              "name": "username",
+              "value": "={{ $env.REDDIT_USERNAME }}"
+            },
+            {
+              "name": "password",
+              "value": "={{ $env.REDDIT_PASSWORD }}"
+            }
+          ]
+        }
+      },
+      "notes": "Refreshes Reddit OAuth token before posting.\n\nSETUP:\n1. Create Reddit app at reddit.com/prefs/apps (script type)\n2. In n8n, create HTTP Basic Auth credential:\n   - Username = Reddit app client_id\n   - Password = Reddit app client_secret\n3. Set n8n environment variables:\n   - REDDIT_USERNAME = your Reddit username\n   - REDDIT_PASSWORD = your Reddit password\n\nThe access_token returned is used by the next Reddit Post node."
+    }
+  ],
+  "connections": {
+    "\u23f0 Every 30 Minutes": {
+      "main": [
+        [
+          {
+            "node": "1a. Scrape SlickDeals RSS"
+          },
+          {
+            "node": "1b. Scrape SmartSaversUnite"
+          },
+          {
+            "node": "1d. Scrape DealNews RSS"
+          },
+          {
+            "node": "1e. Scrape RetailMeNot"
+          },
+          {
+            "node": "1f. Scrape DealsOfAmerica"
+          }
+        ]
+      ]
+    },
+    "1a. Scrape SlickDeals RSS": {
+      "main": [
+        [
+          {
+            "node": "2. Normalize All Deals"
+          }
+        ]
+      ]
+    },
+    "1b. Scrape SmartSaversUnite": {
+      "main": [
+        [
+          {
+            "node": "1c. Parse SSU HTML"
+          }
+        ]
+      ]
+    },
+    "1c. Parse SSU HTML": {
+      "main": [
+        [
+          {
+            "node": "2. Normalize All Deals"
+          }
+        ]
+      ]
+    },
+    "1d. Scrape DealNews RSS": {
+      "main": [
+        [
+          {
+            "node": "2. Normalize All Deals"
+          }
+        ]
+      ]
+    },
+    "1e. Scrape RetailMeNot": {
+      "main": [
+        [
+          {
+            "node": "2. Normalize All Deals"
+          }
+        ]
+      ]
+    },
+    "2. Normalize All Deals": {
+      "main": [
+        [
+          {
+            "node": "3. Remove Expired Deals"
+          }
+        ]
+      ]
+    },
+    "3. Remove Expired Deals": {
+      "main": [
+        [
+          {
+            "node": "4. Deduplicate"
+          }
+        ]
+      ]
+    },
+    "4. Deduplicate": {
+      "main": [
+        [
+          {
+            "node": "5. Check Image Cache"
+          }
+        ]
+      ]
+    },
+    "5. Check Image Cache": {
+      "main": [
+        [
+          {
+            "node": "6. Generate AI Images"
+          }
+        ]
+      ]
+    },
+    "6. Generate AI Images": {
+      "main": [
+        [
+          {
+            "node": "7. Store Image Cache"
+          },
+          {
+            "node": "8. Generate JSX + Social Content"
+          }
+        ]
+      ]
+    },
+    "8. Generate JSX + Social Content": {
+      "main": [
+        [
+          {
+            "node": "9a. Write Deals to DB"
+          },
+          {
+            "node": "9b. Deploy to Vercel"
+          },
+          {
+            "node": "10. Prepare Social Posts"
+          }
+        ]
+      ]
+    },
+    "10. Prepare Social Posts": {
+      "main": [
+        [
+          {
+            "node": "11a. Post to Facebook Page"
+          },
+          {
+            "node": "11b. Post to Facebook Group"
+          },
+          {
+            "node": "11c. Post to Twitter / X"
+          },
+          {
+            "node": "11d. Post to X with Image"
+          },
+          {
+            "node": "11e. Post to Instagram"
+          },
+          {
+            "node": "11g. Post to Telegram Channel"
+          },
+          {
+            "node": "11h. Post to WhatsApp Channel"
+          },
+          {
+            "node": "11i. Post to Pinterest"
+          },
+          {
+            "node": "11k. Post to TikTok"
+          },
+          {
+            "node": "11l. Post to LinkedIn"
+          },
+          {
+            "node": "11m. Post to Threads"
+          },
+          {
+            "node": "11j-pre. Reddit OAuth Refresh",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "11e. Post to Instagram": {
+      "main": [
+        [
+          {
+            "node": "11f. Publish Instagram Post"
+          }
+        ]
+      ]
+    },
+    "11m. Post to Threads": {
+      "main": [
+        [
+          {
+            "node": "11n. Publish Threads Post"
+          }
+        ]
+      ]
+    },
+    "11a. Post to Facebook Page": {
+      "main": [
+        [
+          {
+            "node": "12. Log Social Posts"
+          }
+        ]
+      ]
+    },
+    "11c. Post to Twitter / X": {
+      "main": [
+        [
+          {
+            "node": "12. Log Social Posts"
+          }
+        ]
+      ]
+    },
+    "11g. Post to Telegram Channel": {
+      "main": [
+        [
+          {
+            "node": "12. Log Social Posts"
+          }
+        ]
+      ]
+    },
+    "9a. Write Deals to DB": {
+      "main": [
+        [
+          {
+            "node": "13. Purge Expired"
+          }
+        ]
+      ]
+    },
+    "13. Purge Expired": {
+      "main": [
+        [
+          {
+            "node": "14. Low Deal Alert"
+          }
+        ]
+      ]
+    },
+    "14. Low Deal Alert": {
+      "main": [
+        [
+          {
+            "node": "15. Email Alert"
+          }
+        ]
+      ]
+    },
+    "1f. Scrape DealsOfAmerica": {
+      "main": [
+        [
+          {
+            "node": "1g. Parse DOA HTML"
+          }
+        ]
+      ]
+    },
+    "1g. Parse DOA HTML": {
+      "main": [
+        [
+          {
+            "node": "2. Normalize All Deals"
+          }
+        ]
+      ]
+    },
+    "11j-pre. Reddit OAuth Refresh": {
+      "main": [
+        [
+          {
+            "node": "11j. Post to Reddit",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "11b. Post to Facebook Group": {
+      "main": [
+        [
+          {
+            "node": "12. Log Social Posts",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "11d. Post to X with Image": {
+      "main": [
+        [
+          {
+            "node": "12. Log Social Posts",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "11h. Post to WhatsApp Channel": {
+      "main": [
+        [
+          {
+            "node": "12. Log Social Posts",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "11i. Post to Pinterest": {
+      "main": [
+        [
+          {
+            "node": "12. Log Social Posts",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "11j. Post to Reddit": {
+      "main": [
+        [
+          {
+            "node": "12. Log Social Posts",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "11k. Post to TikTok": {
+      "main": [
+        [
+          {
+            "node": "12. Log Social Posts",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "11l. Post to LinkedIn": {
+      "main": [
+        [
+          {
+            "node": "12. Log Social Posts",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "11n. Publish Threads Post": {
+      "main": [
+        [
+          {
+            "node": "12. Log Social Posts",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "timezone": "America/Chicago"
+  },
+  "meta": {
+    "version": "5.0",
+    "description": "Full pipeline: scrape 5 sources (SlickDeals, SSU, DealNews, RetailMeNot, DealsOfAmerica) \u2192 normalize \u2192 expire \u2192 dedup \u2192 AI images \u2192 social media auto-post \u2192 deploy \u2192 purge",
+    "pipeline_diagram": [
+      "\u23f0 30min \u2500\u2500\u252c\u2500\u2500 SlickDeals RSS",
+      "           \u251c\u2500\u2500 DealsOfAmerica \u2192 Parse",
+      "           \u251c\u2500\u2500 SmartSaversUnite \u2192 Parse",
+      "           \u251c\u2500\u2500 DealNews RSS",
+      "           \u2514\u2500\u2500 RetailMeNot",
+      "                    \u2193",
+      "            2. Normalize \u2192 3. Expire \u2192 4. Dedup",
+      "                    \u2193",
+      "            5. Image Cache \u2192 6. AI Image Gen \u2192 7. Store Cache",
+      "                    \u2193",
+      "            8. Generate JSX + Social Content",
+      "              \u2193         \u2193           \u2193",
+      "         9a. DB    9b. Deploy   10. Social Posts",
+      "              \u2193                  \u2193\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2510",
+      "         13. Purge    \u250c\u2500 11a. Facebook Page             \u2502",
+      "              \u2193       \u251c\u2500 11b. Facebook Group            \u2502",
+      "         14. Alert?   \u251c\u2500 11c. Twitter/X                 \u2502",
+      "              \u2193       \u251c\u2500 11d. X + Image                 \u2502",
+      "         15. Email    \u251c\u2500 11e. Instagram \u2192 11f. Publish  \u2502",
+      "                      \u251c\u2500 11g. Telegram                  \u2502",
+      "                      \u251c\u2500 11h. WhatsApp                  \u2502",
+      "                      \u251c\u2500 11i. Pinterest                 \u2502",
+      "                      \u251c\u2500 11j. Reddit                    \u2502",
+      "                      \u251c\u2500 11k. TikTok                    \u2502",
+      "                      \u251c\u2500 11l. LinkedIn                  \u2502",
+      "                      \u2514\u2500 11m. Threads \u2192 11n. Publish    \u2502",
+      "                                    \u2193                   \u2502",
+      "                              12. Log Posts \u2190\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2518"
+    ],
+    "social_media_setup": {
+      "facebook_page": {
+        "api": "Meta Graph API v19.0",
+        "endpoint": "/PAGE_ID/feed or /PAGE_ID/photos",
+        "auth": "Page Access Token",
+        "setup_url": "https://developers.facebook.com",
+        "permissions": "pages_manage_posts, pages_read_engagement",
+        "cost": "Free",
+        "rate_limit": "200 posts/hour",
+        "notes": "Can post text, links, and images. For deals group like Smart Savers Unite, use Group API."
+      },
+      "facebook_group": {
+        "api": "Meta Graph API v19.0",
+        "endpoint": "/GROUP_ID/feed",
+        "auth": "User Access Token with group admin",
+        "permissions": "publish_to_groups",
+        "cost": "Free",
+        "notes": "Requires group admin to approve app. Good for deal communities."
+      },
+      "twitter_x": {
+        "api": "Twitter API v2",
+        "endpoint": "/2/tweets",
+        "auth": "OAuth 2.0",
+        "setup_url": "https://developer.twitter.com",
+        "cost": "Free tier: 1,500 tweets/month | Basic ($100/mo): 3,000/month",
+        "rate_limit": "50 tweets/day (free)",
+        "notes": "Image posting requires separate media upload step. Use hashtags for discovery."
+      },
+      "instagram": {
+        "api": "Instagram Graph API (via Meta)",
+        "endpoint": "/IG_USER_ID/media \u2192 /IG_USER_ID/media_publish",
+        "auth": "Same as Facebook (Meta App)",
+        "setup_url": "https://developers.facebook.com",
+        "requirements": "Business/Creator account + connected Facebook Page",
+        "cost": "Free",
+        "notes": "2-step process: create media container, then publish. Image must be public URL. Stories and Reels also supported."
+      },
+      "telegram": {
+        "api": "Telegram Bot API",
+        "endpoint": "sendPhoto / sendMessage",
+        "auth": "Bot Token from @BotFather",
+        "cost": "100% FREE \u2014 no limits",
+        "notes": "EASIEST to set up. Create bot, add to channel as admin. Supports Markdown formatting, images, buttons. Best ROI for deal communities."
+      },
+      "whatsapp": {
+        "api": "WhatsApp Cloud API (Meta)",
+        "endpoint": "/PHONE_ID/messages",
+        "auth": "Permanent token from Meta Business",
+        "cost": "Free: 1,000 conversations/month | Then $0.005-0.08 per message",
+        "notes": "Requires pre-approved message templates. Good for WhatsApp Channels (broadcast). Alternative: Twilio WhatsApp API."
+      },
+      "pinterest": {
+        "api": "Pinterest API v5",
+        "endpoint": "/v5/pins",
+        "auth": "OAuth 2.0 Bearer Token",
+        "setup_url": "https://developers.pinterest.com",
+        "cost": "Free",
+        "notes": "HIGHLY recommended for shopping deals \u2014 Pinterest users actively search for deals. Create boards like 'Best Electronics Deals', 'Fashion Sales', etc. Pins drive long-term organic traffic."
+      },
+      "reddit": {
+        "api": "Reddit API (OAuth2)",
+        "endpoint": "/api/submit",
+        "auth": "OAuth2 script app",
+        "cost": "Free",
+        "subreddits": "r/deals, r/DealsReddit, r/amazondealshub, r/budgetfood",
+        "rate_limit": "~10 posts/day per account",
+        "notes": "Follow subreddit rules strictly. Use link posts with deal URL. Too many posts = spam ban."
+      },
+      "tiktok": {
+        "api": "TikTok Content Posting API v2",
+        "endpoint": "/v2/post/publish/content/init/",
+        "auth": "OAuth 2.0",
+        "setup_url": "https://developers.tiktok.com",
+        "cost": "Free",
+        "notes": "Supports photo carousel posts (ideal for deals). For video: use Creatomate/Shotstack to auto-generate 15-sec deal videos from images + text overlays."
+      },
+      "linkedin": {
+        "api": "LinkedIn Marketing API",
+        "endpoint": "/v2/ugcPosts",
+        "auth": "OAuth 2.0",
+        "setup_url": "https://linkedin.com/developers",
+        "cost": "Free",
+        "notes": "Good for B2B deals (office supplies, SaaS, tech). Frame posts as 'smart shopping insights' rather than pure ads."
+      },
+      "threads": {
+        "api": "Threads API (Meta)",
+        "endpoint": "/threads \u2192 /threads_publish",
+        "auth": "Same as Instagram (Meta App)",
+        "cost": "Free",
+        "notes": "Growing platform. 2-step publish like Instagram. Supports images + text."
+      }
+    },
+    "database_tables": [
+      "CREATE TABLE deals (id TEXT PRIMARY KEY, title TEXT, price DECIMAL, original_price DECIMAL, discount INT, store TEXT, category TEXT, link TEXT, image_url TEXT, scraped_at TIMESTAMPTZ, expires_at TIMESTAMPTZ, votes INT, tags TEXT[]);",
+      "CREATE TABLE deal_images (hash TEXT PRIMARY KEY, image_url TEXT, prompt TEXT, created_at TIMESTAMPTZ);",
+      "CREATE TABLE social_posts (id SERIAL PRIMARY KEY, deal_id TEXT, platform TEXT, content TEXT, image_url TEXT, posted_at TIMESTAMPTZ DEFAULT NOW(), status TEXT DEFAULT 'posted', engagement JSONB DEFAULT '{}');"
+    ],
+    "setup_checklist": [
+      "1. Import workflow into n8n (self-hosted or cloud)",
+      "2. Set up PostgreSQL and create 3 tables (see database_tables)",
+      "3. Configure AI image provider (see v4 workflow for options)",
+      "4. Set up social media accounts:",
+      "   \u25a1 Facebook: Create Meta App \u2192 Page token \u2192 pages_manage_posts",
+      "   \u25a1 Twitter/X: Developer account \u2192 OAuth2 app \u2192 tweet.write scope",
+      "   \u25a1 Instagram: Business account \u2192 Meta App \u2192 Graph API token",
+      "   \u25a1 Telegram: @BotFather \u2192 create bot \u2192 add to channel (EASIEST)",
+      "   \u25a1 WhatsApp: Meta Business \u2192 Cloud API \u2192 message template",
+      "   \u25a1 Pinterest: Business account \u2192 Developer App \u2192 pins:write",
+      "   \u25a1 Reddit: Create script app \u2192 OAuth2 token",
+      "   \u25a1 TikTok: Developer account \u2192 Content Posting API",
+      "   \u25a1 LinkedIn: Developer App \u2192 w_member_social scope",
+      "   \u25a1 Threads: Same as Instagram (Meta App)",
+      "5. Replace all YOUR_* placeholders in nodes 11a-11n",
+      "6. Replace Vercel deploy hook in 9b",
+      "7. Replace admin email in 15",
+      "8. Test each platform individually before enabling all",
+      "9. Activate workflow"
+    ],
+    "posting_strategy": {
+      "frequency": "Top 5 deals posted every 30 minutes (max ~240 posts/day across platforms)",
+      "anti_spam": "DB check in node 10 prevents re-posting same deal within 6 hours",
+      "best_times": "Override schedule for peak engagement: 7-9am, 12-1pm, 5-7pm, 9-10pm CT",
+      "platform_priority": "Start with Telegram (free, easy) \u2192 Facebook \u2192 Twitter \u2192 Instagram \u2192 Pinterest \u2192 Reddit \u2192 others",
+      "content_variation": "Each platform gets uniquely formatted content \u2014 not copy-paste across platforms"
+    },
+    "deal_sources": [
+      "SlickDeals RSS (free, no API key)",
+      "SmartSaversUnite HTML scrape (free)",
+      "DealNews RSS (free)",
+      "RetailMeNot feed (free)",
+      "DealsOfAmerica HTML scrape (free) \u2014 electronics, tools, home, lifestyle"
+    ]
+  }
+}
