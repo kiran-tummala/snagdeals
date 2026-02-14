@@ -505,17 +505,15 @@ app.post('/api/scrape', requireApiKey, async (req, res) => {
                        block.match(/<enclosure[^>]+url="([^"]+)"/) ||
                        block.match(/<media:content[^>]+url="([^"]+)"/) ||
                        block.match(/<img[^>]+src="(https?:\/\/[^"]+(?:\.jpg|\.jpeg|\.png|\.webp|\.gif)[^"]*)"/i);
-      // Extract actual store link: ASIN for Amazon, or store website URL
+      // Extract ASIN for Amazon direct link; otherwise keep SlickDeals redirect URL
+      // (SlickDeals links redirect to the actual product page on the retailer's site)
       const asinMatch = block.match(/data-aps-asin="([A-Z0-9]{10})"/) ||
                         block.match(/amazon\.com\/dp\/([A-Z0-9]{10})/);
-      const storeUrlMatch = block.match(/data-product-exitWebsite="([^"]+)"/);
       let dealUrl = lMatch ? lMatch[1] : null;
       let asin = null;
       if (asinMatch) {
         asin = asinMatch[1];
         dealUrl = `https://www.amazon.com/dp/${asin}?tag=${AMAZON_TAG}`;
-      } else if (storeUrlMatch && storeUrlMatch[1] !== 'slickdeals.net') {
-        dealUrl = `https://www.${storeUrlMatch[1]}`;
       }
       const store = detectStore(title);
       const price = parsePrice(title);
