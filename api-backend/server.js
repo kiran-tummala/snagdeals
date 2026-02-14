@@ -499,11 +499,24 @@ app.post('/api/scrape', requireApiKey, async (req, res) => {
       const title = tMatch[1].trim();
       if (title.length < 10 || title === 'SlickDeals') continue;
       const lMatch = block.match(/<link>(https:\/\/slickdeals[^<]+)<\/link>/);
-      // Extract image: SlickDeals uses src="https://static.slickdealscdn.com/attachment/.../300x300/...thumb"
+      // Extract image from content:encoded
       const imgMatch = block.match(/src="(https:\/\/static\.slickdealscdn\.com\/attachment[^"]+)"/) ||
                        block.match(/<enclosure[^>]+url="([^"]+)"/) ||
                        block.match(/<media:content[^>]+url="([^"]+)"/) ||
                        block.match(/<img[^>]+src="(https?:\/\/[^"]+(?:\.jpg|\.jpeg|\.png|\.webp|\.gif)[^"]*)"/i);
+      // Extract actual store link: ASIN for Amazon, or store website URL
+      const asinMatch = block.match(/data-aps-asin="([A-Z0-9]{10})"/);
+      const storeUrlMatch = block.match(/data-product-exitWebsite="([^"]+)"/);
+      let dealUrl = lMatch ? lMatch[1] : null;
+      let asin = null;
+      if (asinMatch) {
+        asin = asinMatch[1];
+        dealUrl = `https://www.amazon.com/dp/${asin}`;
+      } else if (storeUrlMatch && storeUrlMatch[1] !== 'slickdeals.net') {
+        // Try to find a direct URL to the store in the description
+        const directUrl = block.match(/href="[^"]*"[^>]*data-product-exitWebsite="[^"]*"[^>]*>/);
+        if (!directUrl) dealUrl = `https://${storeUrlMatch[1]}`;
+      }
       const store = detectStore(title);
       const price = parsePrice(title);
       const origPrice = price > 0 ? Math.round(price * 1.35) : 0;
@@ -511,10 +524,10 @@ app.post('/api/scrape', requireApiKey, async (req, res) => {
       const sid = 'sd-' + title.toLowerCase().replace(/[^a-z0-9]/g, '').substring(0, 40);
       try {
         await pool.query(
-          `INSERT INTO deals (title, category, store, store_color, price, original_price, discount_percent, source, source_deal_id, deal_url, image_url, votes, tags, shipping_info, country, is_active, scraped_at)
-           VALUES ($1, 'retail', $2, $3, $4, $5, $6, 'slickdeals', $7, $8, $9, $10, $11, $12, 'US', true, NOW())
-           ON CONFLICT (source, source_deal_id) DO UPDATE SET price=EXCLUDED.price, image_url=COALESCE(EXCLUDED.image_url, deals.image_url), scraped_at=NOW(), is_active=true`,
-          [title.substring(0, 200), store, SC[store] || '#86868b', price, origPrice, discount, sid, lMatch ? lMatch[1] : null, imgMatch ? imgMatch[1] : null, Math.floor(Math.random() * 400) + 50, discount >= 35 ? '{hot}' : '{}', store === 'Amazon' ? 'Free Prime' : 'Free Ship']
+          `INSERT INTO deals (title, category, store, store_color, price, original_price, discount_percent, source, source_deal_id, deal_url, image_url, asin, votes, tags, shipping_info, country, is_active, scraped_at)
+           VALUES ($1, 'retail', $2, $3, $4, $5, $6, 'slickdeals', $7, $8, $9, $10, $11, $12, $13, 'US', true, NOW())
+           ON CONFLICT (source, source_deal_id) DO UPDATE SET price=EXCLUDED.price, image_url=COALESCE(EXCLUDED.image_url, deals.image_url), deal_url=COALESCE(EXCLUDED.deal_url, deals.deal_url), asin=COALESCE(EXCLUDED.asin, deals.asin), scraped_at=NOW(), is_active=true`,
+          [title.substring(0, 200), store, SC[store] || '#86868b', price, origPrice, discount, sid, dealUrl, imgMatch ? imgMatch[1] : null, asin, Math.floor(Math.random() * 400) + 50, discount >= 35 ? '{hot}' : '{}', store === 'Amazon' ? 'Free Prime' : 'Free Ship']
         );
         results.upserted++;
         sdCount++;
