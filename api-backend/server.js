@@ -495,17 +495,33 @@ app.get('/api/hotels/search', async (req, res) => {
     const token = await getAmadeusToken();
     const auth = { Authorization: `Bearer ${token}` };
 
-    // 1. Resolve city name → IATA code
-    const cityResp = await fetch(`${AMADEUS_BASE}/v1/reference-data/locations/cities?keyword=${encodeURIComponent(city.split(',')[0].trim())}&max=1`, { headers: auth });
+    // 1. Resolve city name → IATA code + full location info
+    const cityResp = await fetch(`${AMADEUS_BASE}/v1/reference-data/locations/cities?keyword=${encodeURIComponent(city.split(',')[0].trim())}&max=5`, { headers: auth });
     const cityData = await cityResp.json();
-    if (!cityData.data?.length) return res.json({ hotels: [], city });
+    if (!cityData.data?.length) return res.json({ hotels: [], city, location: { name: city } });
 
-    const cityCode = cityData.data[0].iataCode;
+    // Pick best match — prefer exact match or US result
+    const userInput = city.toLowerCase().replace(/[^a-z]/g, '');
+    let bestCity = cityData.data[0];
+    for (const c of cityData.data) {
+      if (c.name && c.name.toLowerCase().replace(/[^a-z]/g, '') === userInput) { bestCity = c; break; }
+      if (c.address?.countryCode === 'US' && bestCity.address?.countryCode !== 'US') bestCity = c;
+    }
+
+    const cityCode = bestCity.iataCode;
+    const stateCode = bestCity.address?.stateCode || '';
+    const countryCode = bestCity.address?.countryCode || '';
+    const resolvedName = bestCity.name || city;
+    // Build full location string: "Haslet, TX, United States"
+    const COUNTRIES = { US: 'United States', CA: 'Canada', GB: 'United Kingdom', AU: 'Australia', IN: 'India', DE: 'Germany', FR: 'France', JP: 'Japan', MX: 'Mexico', IT: 'Italy', ES: 'Spain', BR: 'Brazil', CN: 'China', KR: 'South Korea', TH: 'Thailand', SG: 'Singapore', AE: 'UAE', NL: 'Netherlands', SE: 'Sweden', NO: 'Norway', DK: 'Denmark', CH: 'Switzerland', NZ: 'New Zealand', IE: 'Ireland', PT: 'Portugal', GR: 'Greece', TR: 'Turkey', PH: 'Philippines', ID: 'Indonesia', MY: 'Malaysia', VN: 'Vietnam', CO: 'Colombia', AR: 'Argentina', CL: 'Chile', PE: 'Peru', EG: 'Egypt', ZA: 'South Africa', IL: 'Israel', PL: 'Poland', CZ: 'Czech Republic', HU: 'Hungary', AT: 'Austria', BE: 'Belgium', FI: 'Finland', HR: 'Croatia' };
+    const countryName = COUNTRIES[countryCode] || countryCode;
+    const fullLocation = [resolvedName, stateCode, countryName].filter(Boolean).join(', ');
+    const location = { name: resolvedName, state: stateCode, country: countryCode, countryName, full: fullLocation, iata: cityCode };
 
     // 2. Get hotels in the city
     const htlResp = await fetch(`${AMADEUS_BASE}/v1/reference-data/locations/hotels/by-city?cityCode=${cityCode}&radius=30&radiusUnit=KM&ratings=3,4,5&hotelSource=ALL`, { headers: auth });
     const htlData = await htlResp.json();
-    if (!htlData.data?.length) return res.json({ hotels: [], city: cityCode });
+    if (!htlData.data?.length) return res.json({ hotels: [], city: cityCode, location });
 
     // Take top 20 hotels
     const hotelIds = htlData.data.slice(0, 20).map(h => h.hotelId);
@@ -517,7 +533,7 @@ app.get('/api/hotels/search', async (req, res) => {
     const offResp = await fetch(`${AMADEUS_BASE}/v3/shopping/hotel-offers?hotelIds=${hotelIds.join(',')}&adults=${adults}&checkInDate=${ci}&checkOutDate=${co}&currency=USD&bestRateOnly=true`, { headers: auth });
     const offData = await offResp.json();
 
-    if (!offData.data?.length) return res.json({ hotels: [], city: cityCode });
+    if (!offData.data?.length) return res.json({ hotels: [], city: cityCode, location });
 
     const nights = Math.max(1, Math.round((new Date(co) - new Date(ci)) / 86400000));
     const hotels = offData.data.map(h => {
@@ -537,10 +553,45 @@ app.get('/api/hotels/search', async (req, res) => {
       };
     }).filter(h => h.total > 0).sort((a, b) => a.perNight - b.perNight);
 
-    res.json({ hotels, city: cityCode, cityName: cityData.data[0].name || city });
+    res.json({ hotels, city: cityCode, location });
   } catch (err) {
     console.error('Hotel search error:', err.message);
     res.status(500).json({ error: 'search_failed', message: err.message });
+  }
+});
+
+// ================================================================
+// CITY AUTOCOMPLETE — Resolve city names via Amadeus
+// ================================================================
+app.get('/api/hotels/cities', async (req, res) => {
+  try {
+    const { q } = req.query;
+    if (!q || q.length < 2) return res.json({ cities: [] });
+
+    if (!AMADEUS_KEY || !AMADEUS_SECRET) return res.json({ cities: [] });
+
+    const token = await getAmadeusToken();
+    const keyword = q.split(',')[0].trim();
+    const cityResp = await fetch(`${AMADEUS_BASE}/v1/reference-data/locations/cities?keyword=${encodeURIComponent(keyword)}&max=5`, {
+      headers: { Authorization: `Bearer ${token}` }
+    });
+    const cityData = await cityResp.json();
+    if (!cityData.data?.length) return res.json({ cities: [] });
+
+    const COUNTRIES = { US: 'United States', CA: 'Canada', GB: 'United Kingdom', AU: 'Australia', IN: 'India', DE: 'Germany', FR: 'France', JP: 'Japan', MX: 'Mexico', IT: 'Italy', ES: 'Spain', BR: 'Brazil', CN: 'China', KR: 'South Korea', TH: 'Thailand', SG: 'Singapore', AE: 'UAE', NL: 'Netherlands', SE: 'Sweden', NO: 'Norway', DK: 'Denmark', CH: 'Switzerland', NZ: 'New Zealand', IE: 'Ireland', PT: 'Portugal', GR: 'Greece', TR: 'Turkey', PH: 'Philippines', ID: 'Indonesia', MY: 'Malaysia', VN: 'Vietnam', CO: 'Colombia', AR: 'Argentina', CL: 'Chile', PE: 'Peru', EG: 'Egypt', ZA: 'South Africa', IL: 'Israel', PL: 'Poland', CZ: 'Czech Republic', HU: 'Hungary', AT: 'Austria', BE: 'Belgium', FI: 'Finland', HR: 'Croatia' };
+    const cities = cityData.data.map(c => ({
+      name: c.name,
+      state: c.address?.stateCode || '',
+      country: c.address?.countryCode || '',
+      countryName: COUNTRIES[c.address?.countryCode] || c.address?.countryCode || '',
+      iata: c.iataCode,
+      full: [c.name, c.address?.stateCode, COUNTRIES[c.address?.countryCode] || c.address?.countryCode].filter(Boolean).join(', ')
+    }));
+
+    res.json({ cities });
+  } catch (err) {
+    console.error('City autocomplete error:', err.message);
+    res.json({ cities: [] });
   }
 });
 
