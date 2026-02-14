@@ -2,7 +2,7 @@
   "name": "SnagDeals v6 — Scrape + Push to API",
   "nodes": [
     {
-      "name": "⏰ Every 30 Minutes",
+      "name": "Every 30 Minutes",
       "type": "n8n-nodes-base.scheduleTrigger",
       "position": [200, 400],
       "parameters": {
@@ -12,25 +12,41 @@
       }
     },
     {
-      "name": "1a. Scrape SlickDeals RSS",
+      "name": "1a SlickDeals RSS",
       "type": "n8n-nodes-base.rssFeedRead",
-      "position": [450, 100],
+      "position": [450, 200],
       "parameters": {
         "url": "https://slickdeals.net/newsearch.php?rss=1&forumchoice%5B%5D=9&sort=newest"
       }
     },
     {
-      "name": "1b. Scrape DealNews RSS",
+      "name": "1a Parse SlickDeals",
+      "type": "n8n-nodes-base.code",
+      "position": [650, 200],
+      "parameters": {
+        "jsCode": "var results = [];\nvar items = $input.all();\nfor (var i = 0; i < items.length; i++) {\n  var d = items[i].json;\n  var title = (d.title || '').trim();\n  if (title.length < 10) continue;\n  var priceMatch = title.match(/\\$(\\d+(?:\\.\\d{2})?)/);\n  var price = priceMatch ? parseFloat(priceMatch[1]) : 0;\n  var store = 'Amazon';\n  var t = title.toLowerCase();\n  if (t.indexOf('walmart') >= 0) store = 'Walmart';\n  else if (t.indexOf('best buy') >= 0) store = 'Best Buy';\n  else if (t.indexOf('target') >= 0) store = 'Target';\n  else if (t.indexOf('costco') >= 0) store = 'Costco';\n  else if (t.indexOf('newegg') >= 0) store = 'Newegg';\n  else if (t.indexOf('home depot') >= 0) store = 'Home Depot';\n  else if (t.indexOf('ebay') >= 0) store = 'eBay';\n  results.push({ json: { title: title.substring(0, 200), price: price, store: store, source: 'slickdeals', source_deal_id: 'sd-' + (d.guid || d.link || String(i)).replace(/[^a-zA-Z0-9]/g, '').substring(0, 40), deal_url: d.link || null, country: 'US' } });\n}\nreturn results;"
+      }
+    },
+    {
+      "name": "1b DealNews RSS",
       "type": "n8n-nodes-base.rssFeedRead",
-      "position": [450, 300],
+      "position": [450, 400],
       "parameters": {
         "url": "https://www.dealnews.com/rss/"
       }
     },
     {
-      "name": "1c. Scrape DealsOfAmerica",
+      "name": "1b Parse DealNews",
+      "type": "n8n-nodes-base.code",
+      "position": [650, 400],
+      "parameters": {
+        "jsCode": "var results = [];\nvar items = $input.all();\nfor (var i = 0; i < items.length; i++) {\n  var d = items[i].json;\n  var title = (d.title || '').trim();\n  if (title.length < 10) continue;\n  var priceMatch = title.match(/\\$(\\d+(?:\\.\\d{2})?)/);\n  var price = priceMatch ? parseFloat(priceMatch[1]) : 0;\n  var store = 'Amazon';\n  var t = title.toLowerCase();\n  if (t.indexOf('walmart') >= 0) store = 'Walmart';\n  else if (t.indexOf('best buy') >= 0) store = 'Best Buy';\n  else if (t.indexOf('target') >= 0) store = 'Target';\n  else if (t.indexOf('costco') >= 0) store = 'Costco';\n  else if (t.indexOf('newegg') >= 0) store = 'Newegg';\n  else if (t.indexOf('home depot') >= 0) store = 'Home Depot';\n  else if (t.indexOf('ebay') >= 0) store = 'eBay';\n  results.push({ json: { title: title.substring(0, 200), price: price, store: store, source: 'dealnews', source_deal_id: 'dn-' + (d.guid || d.link || String(i)).replace(/[^a-zA-Z0-9]/g, '').substring(0, 40), deal_url: d.link || null, country: 'US' } });\n}\nreturn results;"
+      }
+    },
+    {
+      "name": "1c DealsOfAmerica",
       "type": "n8n-nodes-base.httpRequest",
-      "position": [450, 500],
+      "position": [450, 600],
       "parameters": {
         "url": "https://www.dealsofamerica.com",
         "method": "GET",
@@ -38,51 +54,25 @@
       }
     },
     {
-      "name": "1d. Parse DOA HTML",
+      "name": "1c Parse DOA",
       "type": "n8n-nodes-base.code",
-      "position": [650, 500],
+      "position": [650, 600],
       "parameters": {
-        "jsCode": "const html = $input.first().json.data || '';\nconst deals = [];\nconst priceRegex = /\\$(\\d+(?:\\.\\d{2})?)/ ;\n\n// Try multiple patterns to find deals\nconst patterns = [\n  /<a[^>]*>([^<]{15,})<\\/a>/gi,\n  /<h[234][^>]*>([^<]{15,})<\\/h[234]>/gi\n];\n\nfor (const regex of patterns) {\n  let match;\n  while ((match = regex.exec(html)) !== null) {\n    const title = match[1].trim();\n    if (title.length < 15 || title.length > 300) continue;\n    if (!/\\$|%|off|deal|save|sale|free/i.test(title)) continue;\n    \n    const priceMatch = title.match(priceRegex);\n    let store = 'Amazon';\n    const t = title.toLowerCase();\n    if (t.includes('walmart')) store = 'Walmart';\n    else if (t.includes('best buy')) store = 'Best Buy';\n    else if (t.includes('target')) store = 'Target';\n    else if (t.includes('costco')) store = 'Costco';\n    else if (t.includes('home depot')) store = 'Home Depot';\n    else if (t.includes('newegg')) store = 'Newegg';\n    else if (t.includes('ebay')) store = 'eBay';\n    \n    deals.push({\n      title: title.substring(0, 200),\n      price: priceMatch ? parseFloat(priceMatch[1]) : 0,\n      store,\n      source: 'dealsofamerica',\n      source_deal_id: 'doa-' + title.toLowerCase().replace(/[^a-z0-9]/g,'').substring(0,30),\n      scrapedAt: new Date().toISOString()\n    });\n  }\n  if (deals.length > 0) break;\n}\n\nconsole.log(`Parsed ${deals.length} deals from DealsOfAmerica`);\nreturn deals.slice(0, 50).map(d => ({ json: d }));"
+        "jsCode": "var html = '';\ntry { html = $input.first().json.data || ''; } catch(e) { return []; }\nvar deals = [];\nvar regex = /<a[^>]*>([^<]{15,200})<\\/a>/gi;\nvar match;\nwhile ((match = regex.exec(html)) !== null && deals.length < 50) {\n  var title = match[1].trim();\n  if (title.length < 15) continue;\n  var hasPrice = /\\$|%|off|deal|save|sale|free/i.test(title);\n  if (!hasPrice) continue;\n  var priceMatch = title.match(/\\$(\\d+(?:\\.\\d{2})?)/);\n  var store = 'Amazon';\n  var t = title.toLowerCase();\n  if (t.indexOf('walmart') >= 0) store = 'Walmart';\n  else if (t.indexOf('best buy') >= 0) store = 'Best Buy';\n  else if (t.indexOf('target') >= 0) store = 'Target';\n  deals.push({ json: { title: title.substring(0, 200), price: priceMatch ? parseFloat(priceMatch[1]) : 0, store: store, source: 'dealsofamerica', source_deal_id: 'doa-' + title.toLowerCase().replace(/[^a-z0-9]/g, '').substring(0, 40), country: 'US' } });\n}\nreturn deals;"
       }
     },
     {
-      "name": "1e. Scrape SmartSaversUnite",
-      "type": "n8n-nodes-base.httpRequest",
-      "position": [450, 700],
-      "parameters": {
-        "url": "https://smartsaversunite.com/",
-        "method": "GET",
-        "responseFormat": "text"
-      }
-    },
-    {
-      "name": "1f. Parse SSU HTML",
-      "type": "n8n-nodes-base.code",
-      "position": [650, 700],
-      "parameters": {
-        "jsCode": "const html = $input.first().json.data || '';\nconst deals = [];\nconst regex = /<h[234][^>]*>([^<]+)<\\/h[234]>/gi;\nlet match;\nwhile ((match = regex.exec(html)) !== null) {\n  const title = match[1].trim();\n  if (title.length < 10 || title.length > 300) continue;\n  const priceMatch = title.match(/\\$(\\d+(?:\\.\\d{2})?)/);\n  const store = title.includes('Amazon') ? 'Amazon' : title.includes('Walmart') ? 'Walmart' : title.includes('Target') ? 'Target' : 'Amazon';\n  deals.push({\n    title: title.replace(/@\\w+/g, '').trim().substring(0, 200),\n    price: priceMatch ? parseFloat(priceMatch[1]) : 0,\n    store,\n    source: 'smartsaversunite',\n    source_deal_id: 'ssu-' + title.toLowerCase().replace(/[^a-z0-9]/g,'').substring(0,30),\n    scrapedAt: new Date().toISOString()\n  });\n}\nconsole.log(`Parsed ${deals.length} deals from SSU`);\nreturn deals.slice(0, 50).map(d => ({ json: d }));"
-      }
-    },
-    {
-      "name": "2. Normalize All Deals",
+      "name": "2 Merge All",
       "type": "n8n-nodes-base.code",
       "position": [900, 400],
       "parameters": {
-        "jsCode": "const storeColors = {\n  'Amazon':'#ff9900','Walmart':'#0071dc','Target':'#cc0000',\n  'Costco':'#e31837','Best Buy':'#0046be','Home Depot':'#f96302',\n  'Newegg':'#c11f1f','eBay':'#e43137','Nike':'#111',\n  \"Lowe's\":'#004990','Kroger':'#0078d4','default':'#86868b'\n};\nconst catEmojis = {retail:'📦',grocery:'🛒',fashion:'👗',furniture:'🏠',restaurant:'🍔'};\n\nfunction categorize(title) {\n  const t = title.toLowerCase();\n  if (/dress|shirt|shoe|sneaker|jacket|fashion|clothing|apparel/i.test(t)) return 'fashion';\n  if (/sofa|couch|bed|furniture|chair|desk|table|mattress/i.test(t)) return 'furniture';\n  if (/chicken|milk|bread|cheese|meat|beef|grocery|produce|food/i.test(t)) return 'grocery';\n  if (/restaurant|pizza|burger|taco|dine|bogo/i.test(t)) return 'restaurant';\n  return 'retail';\n}\n\nconst allDeals = $input.all().map(item => {\n  const d = item.json;\n  const title = d.title || d.name || d.contentSnippet || '';\n  if (!title || title.length < 10) return null;\n  \n  const price = parseFloat(d.price) || 0;\n  const origPrice = parseFloat(d.originalPrice || d.orig) || 0;\n  const discount = origPrice > 0 && price > 0 ? Math.round((1 - price/origPrice) * 100) : parseInt(d.discount || d.off) || 0;\n  const store = d.store || 'Unknown';\n  const category = categorize(title);\n  const source = d.source || 'slickdeals';\n  \n  // Build source_deal_id for dedup\n  const sourceId = d.source_deal_id || d.guid || d.link || (source + '-' + title.toLowerCase().replace(/[^a-z0-9]/g,'').substring(0,40));\n  \n  return {\n    title: title.substring(0, 200),\n    store,\n    store_color: storeColors[store] || storeColors.default,\n    emoji: catEmojis[category] || '📦',\n    category,\n    price,\n    original_price: origPrice || price * 1.3,\n    discount_percent: discount || Math.floor(Math.random() * 20 + 15),\n    source,\n    source_deal_id: sourceId.substring(0, 100),\n    deal_url: d.link || d.url || null,\n    votes: parseInt(d.votes) || Math.floor(Math.random() * 500 + 50),\n    tags: discount >= 40 ? ['hot'] : [],\n    shipping_info: store === 'Amazon' ? 'Free Prime' : 'Free Ship',\n    country: 'US'\n  };\n}).filter(Boolean);\n\nconsole.log(`Normalized ${allDeals.length} deals`);\nreturn allDeals.map(d => ({ json: d }));"
+        "jsCode": "var items = $input.all();\nvar seen = {};\nvar results = [];\nvar storeColors = { 'Amazon': '#ff9900', 'Walmart': '#0071dc', 'Target': '#cc0000', 'Costco': '#e31837', 'Best Buy': '#0046be', 'Home Depot': '#f96302', 'Newegg': '#c11f1f', 'eBay': '#e43137' };\n\nfor (var i = 0; i < items.length; i++) {\n  var d = items[i].json;\n  if (!d || !d.title || d.title.length < 10) continue;\n  var key = d.title.toLowerCase().replace(/[^a-z0-9]/g, '').substring(0, 50);\n  if (seen[key]) continue;\n  seen[key] = true;\n  if (/expired|sold out|out of stock|ended|dead/i.test(d.title)) continue;\n  var price = parseFloat(d.price) || 0;\n  var origPrice = price > 0 ? Math.round(price * 1.4) : 0;\n  var discount = origPrice > 0 ? Math.round((1 - price / origPrice) * 100) : 25;\n  results.push({ json: { title: d.title, store: d.store || 'Amazon', store_color: storeColors[d.store] || '#86868b', emoji: 'tag', category: 'retail', price: price, original_price: origPrice, discount_percent: discount, source: d.source || 'manual', source_deal_id: d.source_deal_id || ('m-' + key), deal_url: d.deal_url || null, votes: Math.floor(Math.random() * 500) + 50, tags: discount >= 35 ? ['hot'] : [], shipping_info: d.store === 'Amazon' ? 'Free Prime' : 'Free Ship', country: d.country || 'US' } });\n}\nreturn results;"
       }
     },
     {
-      "name": "3. Filter & Deduplicate",
-      "type": "n8n-nodes-base.code",
-      "position": [1100, 400],
-      "parameters": {
-        "jsCode": "const seen = new Set();\nconst now = new Date();\n\nconst filtered = $input.all().filter(item => {\n  const d = item.json;\n  // Skip expired/dead\n  if (/expired|sold out|oos|out of stock|ended|dead/i.test(d.title)) return false;\n  // Skip too short titles\n  if (d.title.length < 15) return false;\n  // Deduplicate by normalized title\n  const key = d.title.toLowerCase().replace(/[^a-z0-9]/g, '').substring(0, 50);\n  if (seen.has(key)) return false;\n  seen.add(key);\n  return true;\n});\n\nconsole.log(`After filter/dedup: ${filtered.length} deals (from ${$input.all().length})`);\nreturn filtered;"
-      }
-    },
-    {
-      "name": "4. Push Deals to API",
+      "name": "3 Push to API",
       "type": "n8n-nodes-base.httpRequest",
-      "position": [1300, 400],
+      "position": [1100, 400],
       "parameters": {
         "method": "POST",
         "url": "https://snagdeals.cc/api/deals",
@@ -90,69 +80,59 @@
         "headerParameters": {
           "parameters": [
             { "name": "Content-Type", "value": "application/json" },
-            { "name": "x-api-key", "value": "={{ $env.API_SECRET || 'snagdeals-api-key-change-me-2026' }}" }
+            { "name": "x-api-key", "value": "snagdeals-api-key-change-me-2026" }
           ]
         },
         "sendBody": true,
         "bodyContentType": "raw",
         "rawContentType": "application/json",
-        "body": "={{ JSON.stringify($input.all().map(item => item.json)) }}"
-      },
-      "notes": "Pushes all normalized deals to the SnagDeals API. The API handles upsert (update if exists, insert if new) using source + source_deal_id as unique key."
+        "body": "={{ JSON.stringify($input.all().map(function(item) { return item.json; })) }}"
+      }
     },
     {
-      "name": "5. Log Results",
+      "name": "4 Log Result",
       "type": "n8n-nodes-base.code",
-      "position": [1500, 400],
+      "position": [1300, 400],
       "parameters": {
-        "jsCode": "const response = $input.first().json;\nconsole.log('API Response:', JSON.stringify(response));\nreturn [{ json: { \n  status: 'complete',\n  apiResponse: response,\n  timestamp: new Date().toISOString()\n}}];"
+        "jsCode": "var resp = $input.first().json;\nconsole.log('Done: ' + JSON.stringify(resp));\nreturn [{ json: { status: 'complete', response: resp, time: new Date().toISOString() } }];"
       }
     }
   ],
   "connections": {
-    "⏰ Every 30 Minutes": {
+    "Every 30 Minutes": {
       "main": [[
-        { "node": "1a. Scrape SlickDeals RSS" },
-        { "node": "1b. Scrape DealNews RSS" },
-        { "node": "1c. Scrape DealsOfAmerica" },
-        { "node": "1e. Scrape SmartSaversUnite" }
+        { "node": "1a SlickDeals RSS" },
+        { "node": "1b DealNews RSS" },
+        { "node": "1c DealsOfAmerica" }
       ]]
     },
-    "1a. Scrape SlickDeals RSS": {
-      "main": [[ { "node": "2. Normalize All Deals" } ]]
+    "1a SlickDeals RSS": {
+      "main": [[ { "node": "1a Parse SlickDeals" } ]]
     },
-    "1b. Scrape DealNews RSS": {
-      "main": [[ { "node": "2. Normalize All Deals" } ]]
+    "1a Parse SlickDeals": {
+      "main": [[ { "node": "2 Merge All" } ]]
     },
-    "1c. Scrape DealsOfAmerica": {
-      "main": [[ { "node": "1d. Parse DOA HTML" } ]]
+    "1b DealNews RSS": {
+      "main": [[ { "node": "1b Parse DealNews" } ]]
     },
-    "1d. Parse DOA HTML": {
-      "main": [[ { "node": "2. Normalize All Deals" } ]]
+    "1b Parse DealNews": {
+      "main": [[ { "node": "2 Merge All" } ]]
     },
-    "1e. Scrape SmartSaversUnite": {
-      "main": [[ { "node": "1f. Parse SSU HTML" } ]]
+    "1c DealsOfAmerica": {
+      "main": [[ { "node": "1c Parse DOA" } ]]
     },
-    "1f. Parse SSU HTML": {
-      "main": [[ { "node": "2. Normalize All Deals" } ]]
+    "1c Parse DOA": {
+      "main": [[ { "node": "2 Merge All" } ]]
     },
-    "2. Normalize All Deals": {
-      "main": [[ { "node": "3. Filter & Deduplicate" } ]]
+    "2 Merge All": {
+      "main": [[ { "node": "3 Push to API" } ]]
     },
-    "3. Filter & Deduplicate": {
-      "main": [[ { "node": "4. Push Deals to API" } ]]
-    },
-    "4. Push Deals to API": {
-      "main": [[ { "node": "5. Log Results" } ]]
+    "3 Push to API": {
+      "main": [[ { "node": "4 Log Result" } ]]
     }
   },
   "settings": {
     "executionOrder": "v1",
     "timezone": "America/Chicago"
-  },
-  "meta": {
-    "version": "6.0",
-    "description": "Simplified scraper: 4 sources → normalize → dedup → push to API. Social media posting can be added later.",
-    "pipeline": "⏰ 30min → Scrape 4 sources → Normalize → Dedup → POST /api/deals → Done"
   }
 }
