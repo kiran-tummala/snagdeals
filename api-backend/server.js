@@ -481,37 +481,38 @@ app.post('/api/scrape', requireApiKey, async (req, res) => {
   try {
     const sdResp = await fetch('https://slickdeals.net/newsearch.php?rss=1&forumchoice%5B%5D=9&sort=newest');
     const sdText = await sdResp.text();
-    const sdItems = [];
-    const titleRegex = /<title><!\[CDATA\[(.*?)\]\]><\/title>/g;
-    const linkRegex = /<link>(https:\/\/slickdeals[^<]+)<\/link>/g;
-    let m;
-    while ((m = titleRegex.exec(sdText)) !== null) {
-      sdItems.push({ title: m[1] });
-    }
-    let li = 0;
-    while ((m = linkRegex.exec(sdText)) !== null && li < sdItems.length) {
-      sdItems[li].link = m[1];
-      li++;
-    }
-    for (const item of sdItems) {
-      if (!item.title || item.title.length < 10 || item.title === 'SlickDeals') continue;
-      const store = detectStore(item.title);
-      const price = parsePrice(item.title);
+    // Split into individual <item> blocks to extract per-item data
+    const sdBlocks = sdText.split(/<item>/g).slice(1);
+    let sdCount = 0;
+    for (const block of sdBlocks) {
+      const tMatch = block.match(/<title><!\[CDATA\[(.*?)\]\]><\/title>/) || block.match(/<title>(.*?)<\/title>/);
+      if (!tMatch) continue;
+      const title = tMatch[1].trim();
+      if (title.length < 10 || title === 'SlickDeals') continue;
+      const lMatch = block.match(/<link>(https:\/\/slickdeals[^<]+)<\/link>/);
+      // Extract image from content:encoded, enclosure, or media:content
+      const imgMatch = block.match(/<enclosure[^>]+url="([^"]+)"/) ||
+                       block.match(/<media:content[^>]+url="([^"]+)"/) ||
+                       block.match(/<media:thumbnail[^>]+url="([^"]+)"/) ||
+                       block.match(/<img[^>]+src="(https?:\/\/[^"]+(?:\.jpg|\.png|\.webp)[^"]*)"/i);
+      const store = detectStore(title);
+      const price = parsePrice(title);
       const origPrice = price > 0 ? Math.round(price * 1.35) : 0;
       const discount = origPrice > 0 ? Math.round((1 - price / origPrice) * 100) : 20;
-      const sid = 'sd-' + item.title.toLowerCase().replace(/[^a-z0-9]/g, '').substring(0, 40);
+      const sid = 'sd-' + title.toLowerCase().replace(/[^a-z0-9]/g, '').substring(0, 40);
       try {
         await pool.query(
-          `INSERT INTO deals (title, category, store, store_color, price, original_price, discount_percent, source, source_deal_id, deal_url, votes, tags, shipping_info, country, is_active, scraped_at)
-           VALUES ($1, 'retail', $2, $3, $4, $5, $6, 'slickdeals', $7, $8, $9, $10, $11, 'US', true, NOW())
-           ON CONFLICT (source, source_deal_id) DO UPDATE SET price=EXCLUDED.price, scraped_at=NOW(), is_active=true`,
-          [item.title.substring(0, 200), store, SC[store] || '#86868b', price, origPrice, discount, sid, item.link || null, Math.floor(Math.random() * 400) + 50, discount >= 35 ? '{hot}' : '{}', store === 'Amazon' ? 'Free Prime' : 'Free Ship']
+          `INSERT INTO deals (title, category, store, store_color, price, original_price, discount_percent, source, source_deal_id, deal_url, image_url, votes, tags, shipping_info, country, is_active, scraped_at)
+           VALUES ($1, 'retail', $2, $3, $4, $5, $6, 'slickdeals', $7, $8, $9, $10, $11, $12, 'US', true, NOW())
+           ON CONFLICT (source, source_deal_id) DO UPDATE SET price=EXCLUDED.price, image_url=COALESCE(EXCLUDED.image_url, deals.image_url), scraped_at=NOW(), is_active=true`,
+          [title.substring(0, 200), store, SC[store] || '#86868b', price, origPrice, discount, sid, lMatch ? lMatch[1] : null, imgMatch ? imgMatch[1] : null, Math.floor(Math.random() * 400) + 50, discount >= 35 ? '{hot}' : '{}', store === 'Amazon' ? 'Free Prime' : 'Free Ship']
         );
         results.upserted++;
+        sdCount++;
       } catch (e) { /* skip duplicate */ }
     }
-    results.sources.slickdeals = sdItems.length;
-    results.totalDeals += sdItems.length;
+    results.sources.slickdeals = sdCount;
+    results.totalDeals += sdCount;
   } catch (err) {
     console.error('SlickDeals scrape error:', err.message);
     results.sources.slickdeals = 'error: ' + err.message;
@@ -521,37 +522,37 @@ app.post('/api/scrape', requireApiKey, async (req, res) => {
   try {
     const dnResp = await fetch('https://www.dealnews.com/rss/');
     const dnText = await dnResp.text();
-    const dnItems = [];
-    const dnTitle = /<title><!\[CDATA\[(.*?)\]\]><\/title>/g;
-    const dnLink = /<link>(https:\/\/www\.dealnews[^<]+)<\/link>/g;
-    let dm;
-    while ((dm = dnTitle.exec(dnText)) !== null) {
-      dnItems.push({ title: dm[1] });
-    }
-    let dli = 0;
-    while ((dm = dnLink.exec(dnText)) !== null && dli < dnItems.length) {
-      dnItems[dli].link = dm[1];
-      dli++;
-    }
-    for (const item of dnItems) {
-      if (!item.title || item.title.length < 10 || item.title === 'DealNews') continue;
-      const store = detectStore(item.title);
-      const price = parsePrice(item.title);
+    const dnBlocks = dnText.split(/<item>/g).slice(1);
+    let dnCount = 0;
+    for (const block of dnBlocks) {
+      // DealNews may use plain <title> or CDATA
+      const tMatch = block.match(/<title><!\[CDATA\[(.*?)\]\]><\/title>/) || block.match(/<title>(.*?)<\/title>/);
+      if (!tMatch) continue;
+      const title = tMatch[1].trim();
+      if (title.length < 10 || title === 'DealNews' || title === 'dealnews.com') continue;
+      const lMatch = block.match(/<link>(https?:\/\/[^<]+)<\/link>/);
+      const imgMatch = block.match(/<enclosure[^>]+url="([^"]+)"/) ||
+                       block.match(/<media:content[^>]+url="([^"]+)"/) ||
+                       block.match(/<media:thumbnail[^>]+url="([^"]+)"/) ||
+                       block.match(/<img[^>]+src="(https?:\/\/[^"]+(?:\.jpg|\.png|\.webp)[^"]*)"/i);
+      const store = detectStore(title);
+      const price = parsePrice(title);
       const origPrice = price > 0 ? Math.round(price * 1.4) : 0;
       const discount = origPrice > 0 ? Math.round((1 - price / origPrice) * 100) : 20;
-      const sid = 'dn-' + item.title.toLowerCase().replace(/[^a-z0-9]/g, '').substring(0, 40);
+      const sid = 'dn-' + title.toLowerCase().replace(/[^a-z0-9]/g, '').substring(0, 40);
       try {
         await pool.query(
-          `INSERT INTO deals (title, category, store, store_color, price, original_price, discount_percent, source, source_deal_id, deal_url, votes, tags, shipping_info, country, is_active, scraped_at)
-           VALUES ($1, 'retail', $2, $3, $4, $5, $6, 'dealnews', $7, $8, $9, $10, $11, 'US', true, NOW())
-           ON CONFLICT (source, source_deal_id) DO UPDATE SET price=EXCLUDED.price, scraped_at=NOW(), is_active=true`,
-          [item.title.substring(0, 200), store, SC[store] || '#86868b', price, origPrice, discount, sid, item.link || null, Math.floor(Math.random() * 300) + 30, discount >= 35 ? '{hot}' : '{}', store === 'Amazon' ? 'Free Prime' : 'Free Ship']
+          `INSERT INTO deals (title, category, store, store_color, price, original_price, discount_percent, source, source_deal_id, deal_url, image_url, votes, tags, shipping_info, country, is_active, scraped_at)
+           VALUES ($1, 'retail', $2, $3, $4, $5, $6, 'dealnews', $7, $8, $9, $10, $11, $12, 'US', true, NOW())
+           ON CONFLICT (source, source_deal_id) DO UPDATE SET price=EXCLUDED.price, image_url=COALESCE(EXCLUDED.image_url, deals.image_url), scraped_at=NOW(), is_active=true`,
+          [title.substring(0, 200), store, SC[store] || '#86868b', price, origPrice, discount, sid, lMatch ? lMatch[1] : null, imgMatch ? imgMatch[1] : null, Math.floor(Math.random() * 300) + 30, discount >= 35 ? '{hot}' : '{}', store === 'Amazon' ? 'Free Prime' : 'Free Ship']
         );
         results.upserted++;
+        dnCount++;
       } catch (e) { /* skip */ }
     }
-    results.sources.dealnews = dnItems.length;
-    results.totalDeals += dnItems.length;
+    results.sources.dealnews = dnCount;
+    results.totalDeals += dnCount;
   } catch (err) {
     console.error('DealNews scrape error:', err.message);
     results.sources.dealnews = 'error: ' + err.message;

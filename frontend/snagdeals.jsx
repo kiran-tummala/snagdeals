@@ -129,10 +129,12 @@ const SORTS=['Popular','Newest','Biggest Savings','Price Low','Price High'];
 // ============================================
 
 function ImgBox({src,em,alt}){
+  const fallback=!src||src==='null'?P(alt||'product',100,100):null;
+  const imgSrc=src&&src!=='null'?src:fallback;
   return (
     <div style={{width:100,height:100,borderRadius:14,overflow:'hidden',flexShrink:0,position:'relative',boxShadow:'0 4px 16px rgba(0,0,0,0.1)'}}>
-      <img src={src} alt={alt||''} loading="lazy" style={{width:'100%',height:'100%',objectFit:'cover',display:'block'}}/>
-      <div style={{position:'absolute',inset:0,display:'grid',placeItems:'center',fontSize:36,textShadow:'0 2px 16px rgba(0,0,0,0.4)',filter:'drop-shadow(0 2px 4px rgba(0,0,0,0.3))'}}>{em||'📦'}</div>
+      <img src={imgSrc} alt={alt||''} loading="lazy" style={{width:'100%',height:'100%',objectFit:'cover',display:'block'}}/>
+      {(!src||src==='null')&&<div style={{position:'absolute',inset:0,display:'grid',placeItems:'center',fontSize:36,textShadow:'0 2px 16px rgba(0,0,0,0.4)',filter:'drop-shadow(0 2px 4px rgba(0,0,0,0.3))'}}>{em||'📦'}</div>}
       <div style={{position:'absolute',bottom:0,left:0,right:0,height:'50%',background:'linear-gradient(transparent,rgba(0,0,0,0.3))',borderRadius:'0 0 14px 14px'}}/>
     </div>
   );
