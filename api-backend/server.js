@@ -1,18 +1,17 @@
 // ================================================================
-// SnagDeals API Server — Express.js + Supabase
+// SnagDeals API Server — Express.js + PostgreSQL (Render)
 // ================================================================
 // Serves live deals to website & mobile app
 // Handles: deal listing, filtering, voting, click tracking, expiry
-// Deploy to: Vercel, Railway, Render, or any Node.js host
 // ================================================================
 
 const express = require('express');
 const cors = require('cors');
-const { createClient } = require('@supabase/supabase-js');
+const { Pool } = require('pg');
 
 const app = express();
 
-// Basic in-memory rate limiter (use redis in production)
+// Basic in-memory rate limiter
 const rateLimits = new Map();
 function rateLimit(windowMs = 60000, maxReqs = 60) {
   return (req, res, next) => {
@@ -29,7 +28,7 @@ function rateLimit(windowMs = 60000, maxReqs = 60) {
   };
 }
 
-// CORS: In production, restrict to your domain(s)
+// CORS
 const ALLOWED_ORIGINS = (process.env.CORS_ORIGINS || '*').split(',').map(s => s.trim());
 app.use(cors({
   origin: ALLOWED_ORIGINS[0] === '*' ? true : ALLOWED_ORIGINS,
@@ -37,19 +36,17 @@ app.use(cors({
   allowedHeaders: ['Content-Type', 'x-api-key'],
 }));
 app.use(express.json());
-app.use(rateLimit(60000, 100)); // 100 requests per minute per IP
+app.use(rateLimit(60000, 100));
 
 // ================================================================
-// CONFIG — Set these as environment variables
+// CONFIG
 // ================================================================
-const SUPABASE_URL = process.env.SUPABASE_URL;
-const SUPABASE_SERVICE_KEY = process.env.SUPABASE_SERVICE_KEY;
-const SUPABASE_ANON_KEY = process.env.SUPABASE_ANON_KEY;
+const DATABASE_URL = process.env.DATABASE_URL;
 const PORT = process.env.PORT || 3001;
 const API_SECRET = process.env.API_SECRET;
 
-if (!SUPABASE_URL || !SUPABASE_SERVICE_KEY || !SUPABASE_ANON_KEY) {
-  console.error('Missing required env vars: SUPABASE_URL, SUPABASE_SERVICE_KEY, SUPABASE_ANON_KEY');
+if (!DATABASE_URL) {
+  console.error('Missing required env var: DATABASE_URL');
   process.exit(1);
 }
 if (!API_SECRET) {
@@ -57,15 +54,17 @@ if (!API_SECRET) {
   process.exit(1);
 }
 
-// Two clients: service (for writes from n8n) and anon (for public reads)
-const supabaseAdmin = createClient(SUPABASE_URL, SUPABASE_SERVICE_KEY);
-const supabasePublic = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+// Postgres connection pool
+const pool = new Pool({
+  connectionString: DATABASE_URL,
+  ssl: { rejectUnauthorized: false },
+  max: 10,
+});
 
 // ================================================================
 // MIDDLEWARE
 // ================================================================
 
-// API key check for write operations (n8n, admin)
 function requireApiKey(req, res, next) {
   const key = req.headers['x-api-key'];
   if (!key || key !== API_SECRET) {
@@ -74,14 +73,8 @@ function requireApiKey(req, res, next) {
   next();
 }
 
-// Sanitize search input to prevent injection
-function sanitizeSearch(input) {
-  if (!input) return '';
-  return input.replace(/[%_\\.,()]/g, '').substring(0, 200);
-}
-
 // ================================================================
-// ROUTES: PUBLIC — No auth needed
+// ROUTES: PUBLIC
 // ================================================================
 
 // GET /api/deals — Fetch active deals with filtering & sorting
@@ -89,68 +82,69 @@ app.get('/api/deals', async (req, res) => {
   try {
     const {
       country = 'US',
-      category,        // 'retail', 'grocery', 'fashion', etc.
-      store,           // 'Newegg', 'Amazon', etc.
-      tag,             // 'hot', 'frontpage'
-      search,          // search query
-      sort = 'popular', // 'popular', 'newest', 'savings', 'price_low', 'price_high'
+      category,
+      store,
+      tag,
+      search,
+      sort = 'popular',
       limit = 50,
       offset = 0,
       featured_only = false,
     } = req.query;
 
-    let query = supabasePublic
-      .from('deals')
-      .select('*')
-      .eq('is_active', true);
+    const conditions = ['is_active = true'];
+    const params = [];
+    let paramIdx = 1;
 
-    // Filters
-    if (country) query = query.eq('country', country.toUpperCase());
+    if (country) {
+      conditions.push(`country = $${paramIdx++}`);
+      params.push(country.toUpperCase());
+    }
     if (category && category !== 'all') {
       if (category === 'hot') {
-        query = query.contains('tags', ['hot']);
+        conditions.push(`'hot' = ANY(tags)`);
       } else {
-        query = query.eq('category', category);
+        conditions.push(`category = $${paramIdx++}`);
+        params.push(category);
       }
     }
-    if (store) query = query.eq('store', store);
-    if (tag) query = query.contains('tags', [tag]);
-    if (featured_only === 'true') query = query.eq('is_featured', true);
+    if (store) {
+      conditions.push(`store = $${paramIdx++}`);
+      params.push(store);
+    }
+    if (tag) {
+      conditions.push(`$${paramIdx++} = ANY(tags)`);
+      params.push(tag);
+    }
+    if (featured_only === 'true') {
+      conditions.push('is_featured = true');
+    }
     if (search) {
-      const clean = sanitizeSearch(search);
-      query = query.or(`title.ilike.%${clean}%,store.ilike.%${clean}%,description.ilike.%${clean}%`);
+      const clean = search.replace(/[%_\\.,()]/g, '').substring(0, 200);
+      conditions.push(`(title ILIKE $${paramIdx} OR store ILIKE $${paramIdx} OR description ILIKE $${paramIdx})`);
+      params.push(`%${clean}%`);
+      paramIdx++;
     }
 
-    // Sorting
+    let orderBy;
     switch (sort) {
-      case 'popular':
-        query = query.order('votes', { ascending: false });
-        break;
-      case 'newest':
-        query = query.order('created_at', { ascending: false });
-        break;
-      case 'savings':
-        query = query.order('discount_percent', { ascending: false });
-        break;
-      case 'price_low':
-        query = query.order('price', { ascending: true });
-        break;
-      case 'price_high':
-        query = query.order('price', { ascending: false });
-        break;
-      default:
-        query = query.order('created_at', { ascending: false });
+      case 'popular': orderBy = 'votes DESC'; break;
+      case 'newest': orderBy = 'created_at DESC'; break;
+      case 'savings': orderBy = 'discount_percent DESC'; break;
+      case 'price_low': orderBy = 'price ASC'; break;
+      case 'price_high': orderBy = 'price DESC'; break;
+      default: orderBy = 'created_at DESC';
     }
 
-    // Pagination
-    query = query.range(parseInt(offset), parseInt(offset) + parseInt(limit) - 1);
+    const lim = Math.min(parseInt(limit) || 50, 200);
+    const off = parseInt(offset) || 0;
 
-    const { data, error, count } = await query;
+    const sql = `SELECT * FROM deals WHERE ${conditions.join(' AND ')} ORDER BY ${orderBy} LIMIT $${paramIdx++} OFFSET $${paramIdx++}`;
+    params.push(lim, off);
 
-    if (error) throw error;
+    const { rows } = await pool.query(sql, params);
 
-    // Transform for frontend compatibility
-    const deals = (data || []).map(d => ({
+    const deals = rows.map(d => ({
       id: d.id,
       cat: d.category,
       store: d.store,
@@ -174,75 +168,42 @@ app.get('/api/deals', async (req, res) => {
       verified: d.is_verified,
       featured: d.is_featured,
       country: d.country,
-      hoursRemaining: d.hours_remaining ? Math.round(d.hours_remaining) : null,
       createdAt: d.created_at,
     }));
 
-    res.json({
-      success: true,
-      deals,
-      total: deals.length,
-      offset: parseInt(offset),
-      limit: parseInt(limit),
-    });
+    res.json({ success: true, deals, total: deals.length, offset: off, limit: lim });
   } catch (err) {
     console.error('GET /api/deals error:', err);
     res.status(500).json({ error: 'Failed to fetch deals' });
   }
 });
 
-// GET /api/stats — Dashboard stats (MUST be before /api/deals/:id)
+// GET /api/stats — Dashboard stats
 app.get('/api/stats', async (req, res) => {
   try {
-    const [
-      { count: totalActive },
-      { count: totalAll },
-    ] = await Promise.all([
-      supabasePublic.from('deals').select('*', { count: 'exact', head: true }).eq('is_active', true),
-      supabasePublic.from('deals').select('*', { count: 'exact', head: true }),
+    const [activeRes, allRes, countryRes, catRes, storeRes] = await Promise.all([
+      pool.query('SELECT COUNT(*) FROM deals WHERE is_active = true'),
+      pool.query('SELECT COUNT(*) FROM deals'),
+      pool.query('SELECT country, COUNT(*) as cnt FROM deals WHERE is_active = true GROUP BY country'),
+      pool.query('SELECT category, COUNT(*) as cnt FROM deals WHERE is_active = true GROUP BY category'),
+      pool.query('SELECT store, COUNT(*) as cnt FROM deals WHERE is_active = true GROUP BY store'),
     ]);
 
-    // Deals by country
-    const { data: byCountry } = await supabasePublic
-      .from('deals')
-      .select('country')
-      .eq('is_active', true);
-
-    const countryCounts = {};
-    (byCountry || []).forEach(d => {
-      countryCounts[d.country] = (countryCounts[d.country] || 0) + 1;
-    });
-
-    // Deals by category
-    const { data: byCat } = await supabasePublic
-      .from('deals')
-      .select('category')
-      .eq('is_active', true);
-
-    const catCounts = {};
-    (byCat || []).forEach(d => {
-      catCounts[d.category] = (catCounts[d.category] || 0) + 1;
-    });
-
-    // Deals by store
-    const { data: byStore } = await supabasePublic
-      .from('deals')
-      .select('store')
-      .eq('is_active', true);
-
-    const storeCounts = {};
-    (byStore || []).forEach(d => {
-      storeCounts[d.store] = (storeCounts[d.store] || 0) + 1;
-    });
+    const byCountry = {};
+    countryRes.rows.forEach(r => { byCountry[r.country] = parseInt(r.cnt); });
+    const byCategory = {};
+    catRes.rows.forEach(r => { byCategory[r.category] = parseInt(r.cnt); });
+    const byStore = {};
+    storeRes.rows.forEach(r => { byStore[r.store] = parseInt(r.cnt); });
 
     res.json({
       success: true,
       stats: {
-        totalActive: totalActive || 0,
-        totalAll: totalAll || 0,
-        byCountry: countryCounts,
-        byCategory: catCounts,
-        byStore: storeCounts,
+        totalActive: parseInt(activeRes.rows[0].count),
+        totalAll: parseInt(allRes.rows[0].count),
+        byCountry,
+        byCategory,
+        byStore,
       },
     });
   } catch (err) {
@@ -254,40 +215,26 @@ app.get('/api/stats', async (req, res) => {
 // GET /api/deals/:id — Single deal
 app.get('/api/deals/:id', async (req, res) => {
   try {
-    const { data, error } = await supabasePublic
-      .from('deals')
-      .select('*')
-      .eq('id', req.params.id)
-      .eq('is_active', true)
-      .single();
-
-    if (error || !data) {
-      return res.status(404).json({ error: 'Deal not found' });
-    }
-
-    res.json({ success: true, deal: data });
+    const { rows } = await pool.query('SELECT * FROM deals WHERE id = $1 AND is_active = true', [req.params.id]);
+    if (!rows.length) return res.status(404).json({ error: 'Deal not found' });
+    res.json({ success: true, deal: rows[0] });
   } catch (err) {
     console.error('GET /api/deals/:id error:', err);
     res.status(500).json({ error: 'Failed to fetch deal' });
   }
 });
 
-// POST /api/deals/:id/vote — Vote on a deal
+// POST /api/deals/:id/vote
 app.post('/api/deals/:id/vote', async (req, res) => {
   try {
     const { fingerprint, vote_type = 'up' } = req.body;
     if (!fingerprint) return res.status(400).json({ error: 'fingerprint required' });
-
-    const { data, error } = await supabaseAdmin
-      .from('deal_votes')
-      .upsert({
-        deal_id: req.params.id,
-        user_fingerprint: fingerprint,
-        vote_type,
-      }, { onConflict: 'deal_id,user_fingerprint' });
-
-    if (error) throw error;
-
+    await pool.query(
+      `INSERT INTO deal_votes (deal_id, user_fingerprint, vote_type)
+       VALUES ($1, $2, $3)
+       ON CONFLICT (deal_id, user_fingerprint) DO UPDATE SET vote_type = $3`,
+      [req.params.id, fingerprint, vote_type]
+    );
     res.json({ success: true });
   } catch (err) {
     console.error('POST /api/deals/:id/vote error:', err);
@@ -295,18 +242,14 @@ app.post('/api/deals/:id/vote', async (req, res) => {
   }
 });
 
-// POST /api/deals/:id/click — Track affiliate click
+// POST /api/deals/:id/click
 app.post('/api/deals/:id/click', async (req, res) => {
   try {
     const { fingerprint, country, city } = req.body;
-
-    await supabaseAdmin.from('deal_clicks').insert({
-      deal_id: req.params.id,
-      user_fingerprint: fingerprint,
-      country,
-      city,
-    });
-
+    await pool.query(
+      'INSERT INTO deal_clicks (deal_id, user_fingerprint, country, city) VALUES ($1, $2, $3, $4)',
+      [req.params.id, fingerprint, country, city]
+    );
     res.json({ success: true });
   } catch (err) {
     console.error('POST /api/deals/:id/click error:', err);
@@ -314,24 +257,20 @@ app.post('/api/deals/:id/click', async (req, res) => {
   }
 });
 
-// GET /api/categories — Category counts for tab badges
+// GET /api/categories
 app.get('/api/categories', async (req, res) => {
   try {
     const country = req.query.country || 'US';
-
-    const { data } = await supabasePublic
-      .from('deals')
-      .select('category, tags')
-      .eq('is_active', true)
-      .eq('country', country);
-
+    const { rows } = await pool.query(
+      'SELECT category, tags FROM deals WHERE is_active = true AND country = $1',
+      [country]
+    );
     const counts = { all: 0, hot: 0 };
-    (data || []).forEach(d => {
+    rows.forEach(d => {
       counts.all++;
       if (d.tags?.includes('hot')) counts.hot++;
       counts[d.category] = (counts[d.category] || 0) + 1;
     });
-
     res.json({ success: true, counts });
   } catch (err) {
     console.error('GET /api/categories error:', err);
@@ -344,78 +283,78 @@ app.get('/api/categories', async (req, res) => {
 // ================================================================
 
 // POST /api/deals — Create or update deals (upsert)
-// n8n calls this to push scraped deals into the database
 app.post('/api/deals', requireApiKey, async (req, res) => {
   try {
     const deals = Array.isArray(req.body) ? req.body : [req.body];
+    let upserted = 0;
 
-    const prepared = deals.map(d => ({
-      title: d.title,
-      description: d.description || null,
-      category: d.category || d.cat || 'retail',
-      store: d.store,
-      store_color: d.store_color || d.sc || '#333333',
-      emoji: d.emoji || d.em || '🏷️',
-      price: parseFloat(d.price) || 0,
-      original_price: parseFloat(d.original_price || d.orig) || null,
-      discount_percent: parseInt(d.discount_percent || d.off) || 0,
-      currency: d.currency || 'USD',
-      coupon_code: d.coupon_code || d.coupon || null,
-      deal_url: d.deal_url || d.url || null,
-      affiliate_url: d.affiliate_url || null,
-      image_url: d.image_url || d.img || null,
-      location: d.location || d.loc || null,
-      destination: d.destination || d.dest || null,
-      votes: parseInt(d.votes) || 0,
-      comments_count: parseInt(d.comments_count || d.comments) || 0,
-      tags: d.tags || [],
-      source: d.source || 'n8n',
-      source_deal_id: d.source_deal_id || d.source_id || null,
-      shipping_info: d.shipping_info || d.ship || 'Free Ship',
-      is_active: true,
-      is_verified: d.is_verified || false,
-      is_featured: d.is_featured || d.featured || false,
-      country: d.country || 'US',
-      asin: d.asin || null,
-      auto_expire_hours: parseInt(d.auto_expire_hours) || 48,
-      expires_at: d.expires_at || null,
-      scraped_at: new Date().toISOString(),
-    }));
-
-    // Upsert: if source + source_deal_id already exists, update price & votes
-    const { data, error } = await supabaseAdmin
-      .from('deals')
-      .upsert(prepared, {
-        onConflict: 'source,source_deal_id',
-        ignoreDuplicates: false,
-      })
-      .select();
-
-    if (error) throw error;
-
-    // Update source health
-    if (prepared.length > 0 && prepared[0].source) {
-      await supabaseAdmin
-        .from('deal_sources')
-        .update({
-          last_scraped_at: new Date().toISOString(),
-          last_deal_count: prepared.length,
-        })
-        .eq('name', prepared[0].source);
+    for (const d of deals) {
+      const { rows } = await pool.query(
+        `INSERT INTO deals (title, description, category, store, store_color, emoji,
+          price, original_price, discount_percent, currency, coupon_code,
+          deal_url, affiliate_url, image_url, location, destination,
+          votes, comments_count, tags, source, source_deal_id,
+          shipping_info, is_active, is_verified, is_featured, country,
+          asin, auto_expire_hours, expires_at, scraped_at)
+        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29,NOW())
+        ON CONFLICT (source, source_deal_id) DO UPDATE SET
+          title=EXCLUDED.title, price=EXCLUDED.price, original_price=EXCLUDED.original_price,
+          discount_percent=EXCLUDED.discount_percent, votes=EXCLUDED.votes,
+          comments_count=EXCLUDED.comments_count, tags=EXCLUDED.tags,
+          is_active=true, scraped_at=NOW(), updated_at=NOW()
+        RETURNING id`,
+        [
+          d.title,
+          d.description || null,
+          d.category || d.cat || 'retail',
+          d.store,
+          d.store_color || d.sc || '#333333',
+          d.emoji || d.em || '🏷️',
+          parseFloat(d.price) || 0,
+          parseFloat(d.original_price || d.orig) || null,
+          parseInt(d.discount_percent || d.off) || 0,
+          d.currency || 'USD',
+          d.coupon_code || d.coupon || null,
+          d.deal_url || d.url || null,
+          d.affiliate_url || null,
+          d.image_url || d.img || null,
+          d.location || d.loc || null,
+          d.destination || d.dest || null,
+          parseInt(d.votes) || 0,
+          parseInt(d.comments_count || d.comments) || 0,
+          d.tags || [],
+          d.source || 'n8n',
+          d.source_deal_id || d.source_id || null,
+          d.shipping_info || d.ship || 'Free Ship',
+          true,
+          d.is_verified || false,
+          d.is_featured || d.featured || false,
+          d.country || 'US',
+          d.asin || null,
+          parseInt(d.auto_expire_hours) || 48,
+          d.expires_at || null,
+        ]
+      );
+      upserted += rows.length;
     }
 
-    res.json({
-      success: true,
-      created: data?.length || 0,
-      message: `Upserted ${data?.length || 0} deals`,
-    });
+    // Update source health
+    if (deals.length > 0) {
+      const src = deals[0].source || 'n8n';
+      await pool.query(
+        `UPDATE deal_sources SET last_scraped_at = NOW(), last_deal_count = $1 WHERE name = $2`,
+        [deals.length, src]
+      );
+    }
+
+    res.json({ success: true, created: upserted, message: `Upserted ${upserted} deals` });
   } catch (err) {
     console.error('POST /api/deals error:', err);
     res.status(500).json({ error: 'Failed to upsert deals' });
   }
 });
 
-// PATCH /api/deals/:id — Update a single deal
+// PATCH /api/deals/:id
 const ALLOWED_PATCH_FIELDS = [
   'title', 'description', 'category', 'store', 'store_color', 'emoji',
   'price', 'original_price', 'discount_percent', 'currency', 'coupon_code',
@@ -426,39 +365,39 @@ const ALLOWED_PATCH_FIELDS = [
 ];
 app.patch('/api/deals/:id', requireApiKey, async (req, res) => {
   try {
-    const updates = {};
+    const setClauses = [];
+    const params = [];
+    let paramIdx = 1;
+
     for (const key of Object.keys(req.body)) {
       if (ALLOWED_PATCH_FIELDS.includes(key)) {
-        updates[key] = req.body[key];
+        setClauses.push(`${key} = $${paramIdx++}`);
+        params.push(req.body[key]);
       }
     }
-    if (Object.keys(updates).length === 0) {
-      return res.status(400).json({ error: 'No valid fields to update' });
-    }
+    if (!setClauses.length) return res.status(400).json({ error: 'No valid fields to update' });
 
-    const { data, error } = await supabaseAdmin
-      .from('deals')
-      .update(updates)
-      .eq('id', req.params.id)
-      .select();
+    setClauses.push(`updated_at = NOW()`);
+    params.push(req.params.id);
 
-    if (error) throw error;
-    res.json({ success: true, deal: data?.[0] });
+    const { rows } = await pool.query(
+      `UPDATE deals SET ${setClauses.join(', ')} WHERE id = $${paramIdx} RETURNING *`,
+      params
+    );
+    res.json({ success: true, deal: rows[0] });
   } catch (err) {
     console.error('PATCH /api/deals/:id error:', err);
     res.status(500).json({ error: 'Failed to update deal' });
   }
 });
 
-// DELETE /api/deals/:id — Soft-delete (deactivate)
+// DELETE /api/deals/:id — Soft-delete
 app.delete('/api/deals/:id', requireApiKey, async (req, res) => {
   try {
-    const { error } = await supabaseAdmin
-      .from('deals')
-      .update({ is_active: false, deactivated_at: new Date().toISOString() })
-      .eq('id', req.params.id);
-
-    if (error) throw error;
+    await pool.query(
+      'UPDATE deals SET is_active = false, deactivated_at = NOW() WHERE id = $1',
+      [req.params.id]
+    );
     res.json({ success: true, message: 'Deal deactivated' });
   } catch (err) {
     console.error('DELETE /api/deals/:id error:', err);
@@ -466,52 +405,45 @@ app.delete('/api/deals/:id', requireApiKey, async (req, res) => {
   }
 });
 
-// POST /api/expire — Run auto-expiry manually (also called by n8n cron)
+// POST /api/expire — Auto-expiry
 app.post('/api/expire', requireApiKey, async (req, res) => {
   try {
-    const { data, error } = await supabaseAdmin.rpc('expire_old_deals');
-    if (error) throw error;
-    res.json({ success: true, expired: data, message: `Expired ${data} deals` });
+    const { rowCount } = await pool.query(
+      `UPDATE deals SET is_active = false, deactivated_at = NOW()
+       WHERE is_active = true AND auto_expire_hours IS NOT NULL
+       AND created_at < NOW() - (auto_expire_hours || ' hours')::interval`
+    );
+    res.json({ success: true, expired: rowCount, message: `Expired ${rowCount} deals` });
   } catch (err) {
     console.error('POST /api/expire error:', err);
     res.status(500).json({ error: 'Failed to expire deals' });
   }
 });
 
-// POST /api/deals/bulk-deactivate — Deactivate deals by source
+// POST /api/deals/bulk-deactivate
 app.post('/api/deals/bulk-deactivate', requireApiKey, async (req, res) => {
   try {
     const { source, older_than_hours = 48 } = req.body;
     const cutoff = new Date(Date.now() - older_than_hours * 3600 * 1000).toISOString();
-
-    let query = supabaseAdmin
-      .from('deals')
-      .update({ is_active: false, deactivated_at: new Date().toISOString() })
-      .eq('is_active', true)
-      .lt('created_at', cutoff);
-
-    if (source) query = query.eq('source', source);
-
-    const { error, count } = await query;
-    if (error) throw error;
-
-    res.json({ success: true, deactivated: count });
+    const params = [cutoff];
+    let sql = 'UPDATE deals SET is_active = false, deactivated_at = NOW() WHERE is_active = true AND created_at < $1';
+    if (source) {
+      sql += ' AND source = $2';
+      params.push(source);
+    }
+    const { rowCount } = await pool.query(sql, params);
+    res.json({ success: true, deactivated: rowCount });
   } catch (err) {
     console.error('POST /api/deals/bulk-deactivate error:', err);
     res.status(500).json({ error: 'Failed to bulk deactivate deals' });
   }
 });
 
-// GET /api/sources — Scraper health dashboard
+// GET /api/sources
 app.get('/api/sources', async (req, res) => {
   try {
-    const { data, error } = await supabasePublic
-      .from('deal_sources')
-      .select('*')
-      .order('last_scraped_at', { ascending: false });
-
-    if (error) throw error;
-    res.json({ success: true, sources: data });
+    const { rows } = await pool.query('SELECT * FROM deal_sources ORDER BY last_scraped_at DESC NULLS LAST');
+    res.json({ success: true, sources: rows });
   } catch (err) {
     console.error('GET /api/sources error:', err);
     res.status(500).json({ error: 'Failed to fetch sources' });
@@ -521,23 +453,22 @@ app.get('/api/sources', async (req, res) => {
 // ================================================================
 // HEALTH CHECK
 // ================================================================
-app.get('/api/health', (req, res) => {
-  res.json({
-    status: 'ok',
-    service: 'SnagDeals API',
-    version: '1.0.0',
-    timestamp: new Date().toISOString(),
-  });
+app.get('/api/health', async (req, res) => {
+  try {
+    await pool.query('SELECT 1');
+    res.json({ status: 'ok', service: 'SnagDeals API', version: '2.0.0', timestamp: new Date().toISOString() });
+  } catch (err) {
+    res.status(503).json({ status: 'error', message: 'Database unreachable' });
+  }
 });
 
 // ================================================================
 // START SERVER
 // ================================================================
 app.listen(PORT, () => {
-  console.log(`🏷️ SnagDeals API running on port ${PORT}`);
-  console.log(`   Supabase: ${SUPABASE_URL}`);
-  console.log(`   Health: http://localhost:${PORT}/api/health`);
-  console.log(`   Deals:  http://localhost:${PORT}/api/deals?country=US&sort=popular`);
+  console.log(`SnagDeals API running on port ${PORT}`);
+  console.log(`  Health: http://localhost:${PORT}/api/health`);
+  console.log(`  Deals:  http://localhost:${PORT}/api/deals?country=US&sort=popular`);
 });
 
 module.exports = app;

@@ -23,5 +23,20 @@ services:
     volumes:
       - n8n_data:/home/node/.n8n
 
+  api:
+    build:
+      context: ../api-backend
+      dockerfile: Dockerfile
+    container_name: snagdeals-api
+    restart: unless-stopped
+    ports:
+      - "3001:3001"
+    environment:
+      - DATABASE_URL=${DATABASE_URL}
+      - API_SECRET=${API_SECRET}
+      - CORS_ORIGINS=https://snagdeals.cc,https://www.snagdeals.cc
+      - PORT=3001
+      - NODE_ENV=production
+
 volumes:
   n8n_data:
