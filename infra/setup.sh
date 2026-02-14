@@ -10,7 +10,10 @@ fi
 
 echo "Updating system and installing dependencies..."
 apt update && apt upgrade -y
-apt install -y docker.io docker-compose nginx certbot python3-certbot-nginx ufw
+apt install -y docker.io nginx certbot python3-certbot-nginx ufw
+
+echo "Installing Docker Compose plugin..."
+apt install -y docker-compose-plugin || true
 
 echo "Enabling Docker service..."
 systemctl enable --now docker

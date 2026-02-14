@@ -1,5 +1,5 @@
-## cloud-init to bootstrap the server: git clone repo and run setup
 #cloud-config
+## cloud-init to bootstrap the server: git clone repo and run setup
 packages:
   - git
 runcmd:

@@ -1,10 +1,10 @@
-import { useState, useEffect, useMemo, useCallback } from "react";
+import React, { useState, useEffect, useMemo, useCallback } from "react";
 // ================================================================
 // SnagDeals — Live Deal Configuration
 // Set API_URL to your deployed API server. When set, deals are
 // fetched live from Supabase. When empty, falls back to hardcoded deals.
 // ================================================================
-const API_URL = ''; // e.g., 'https://api.snagdeals.co' or 'http://localhost:3001'
+const API_URL = import.meta.env?.VITE_API_URL || ''; // e.g., 'https://api.snagdeals.co' or 'http://localhost:3001'
 const S={am:'#ff9900',wm:'#0071dc',tg:'#cc0000',co:'#e31837',sm:'#0060a9',eb:'#e43137',bb:'#0046be',hd:'#f96302',nk:'#111',ua:'#1d1d1d',lo:'#004990',hb:'#ee1c25',tt:'#e31837',kr:'#0078d4',al:'#e01933',wf:'#006a4d',sp:'#ff7500',tj:'#c8102e',ab:'#ff385c',vb:'#3b5998',ag:'#af52de',mc:'#bb0000',tm:'#e20074'};
 // Image helper: generates beautiful gradient product thumbnails as inline SVG data URIs
 // Each image is unique based on seed, with category-aware colors and subtle patterns
@@ -549,7 +549,7 @@ setTimeout(()=>{
 const prods=PRODUCT_DB[key]||PRODUCT_DB['default'].map(p=>({...p,t:p.t.replace('${Q}',q.trim().split(' ').map(w=>w.charAt(0).toUpperCase()+w.slice(1)).join(' '))}));
 const allResults=[];
 prods.forEach((prod,pi)=>{
-const stores=STORE_DB.sort(()=>Math.random()-0.5).slice(0,Math.floor(Math.random()*4)+5);
+const stores=[...STORE_DB].sort(()=>Math.random()-0.5).slice(0,Math.floor(Math.random()*4)+5);
 stores.forEach(store=>{
 const variance=(Math.random()*0.25-0.1);
 const price=Math.max(4.99,+(prod.base*store.mult*(1+variance)).toFixed(2));

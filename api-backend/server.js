@@ -42,11 +42,20 @@ app.use(rateLimit(60000, 100)); // 100 requests per minute per IP
 // ================================================================
 // CONFIG — Set these as environment variables
 // ================================================================
-const SUPABASE_URL = process.env.SUPABASE_URL || 'https://YOUR_PROJECT.supabase.co';
-const SUPABASE_SERVICE_KEY = process.env.SUPABASE_SERVICE_KEY || 'YOUR_SERVICE_ROLE_KEY';
-const SUPABASE_ANON_KEY = process.env.SUPABASE_ANON_KEY || 'YOUR_ANON_KEY';
+const SUPABASE_URL = process.env.SUPABASE_URL;
+const SUPABASE_SERVICE_KEY = process.env.SUPABASE_SERVICE_KEY;
+const SUPABASE_ANON_KEY = process.env.SUPABASE_ANON_KEY;
 const PORT = process.env.PORT || 3001;
-const API_SECRET = process.env.API_SECRET || 'snagdeals-n8n-secret-2026';
+const API_SECRET = process.env.API_SECRET;
+
+if (!SUPABASE_URL || !SUPABASE_SERVICE_KEY || !SUPABASE_ANON_KEY) {
+  console.error('Missing required env vars: SUPABASE_URL, SUPABASE_SERVICE_KEY, SUPABASE_ANON_KEY');
+  process.exit(1);
+}
+if (!API_SECRET) {
+  console.error('Missing required env var: API_SECRET');
+  process.exit(1);
+}
 
 // Two clients: service (for writes from n8n) and anon (for public reads)
 const supabaseAdmin = createClient(SUPABASE_URL, SUPABASE_SERVICE_KEY);
@@ -68,7 +77,7 @@ function requireApiKey(req, res, next) {
 // Sanitize search input to prevent injection
 function sanitizeSearch(input) {
   if (!input) return '';
-  return input.replace(/[%_\\]/g, '\\$&').substring(0, 200); // escape wildcards, limit length
+  return input.replace(/[%_\\.,()]/g, '').substring(0, 200);
 }
 
 // ================================================================
@@ -90,7 +99,7 @@ app.get('/api/deals', async (req, res) => {
       featured_only = false,
     } = req.query;
 
-    let query = supabaseAdmin
+    let query = supabasePublic
       .from('deals')
       .select('*')
       .eq('is_active', true);
@@ -178,7 +187,7 @@ app.get('/api/deals', async (req, res) => {
     });
   } catch (err) {
     console.error('GET /api/deals error:', err);
-    res.status(500).json({ error: 'Failed to fetch deals', details: err.message });
+    res.status(500).json({ error: 'Failed to fetch deals' });
   }
 });
 
@@ -189,12 +198,12 @@ app.get('/api/stats', async (req, res) => {
       { count: totalActive },
       { count: totalAll },
     ] = await Promise.all([
-      supabaseAdmin.from('deals').select('*', { count: 'exact', head: true }).eq('is_active', true),
-      supabaseAdmin.from('deals').select('*', { count: 'exact', head: true }),
+      supabasePublic.from('deals').select('*', { count: 'exact', head: true }).eq('is_active', true),
+      supabasePublic.from('deals').select('*', { count: 'exact', head: true }),
     ]);
 
     // Deals by country
-    const { data: byCountry } = await supabaseAdmin
+    const { data: byCountry } = await supabasePublic
       .from('deals')
       .select('country')
       .eq('is_active', true);
@@ -205,7 +214,7 @@ app.get('/api/stats', async (req, res) => {
     });
 
     // Deals by category
-    const { data: byCat } = await supabaseAdmin
+    const { data: byCat } = await supabasePublic
       .from('deals')
       .select('category')
       .eq('is_active', true);
@@ -216,7 +225,7 @@ app.get('/api/stats', async (req, res) => {
     });
 
     // Deals by store
-    const { data: byStore } = await supabaseAdmin
+    const { data: byStore } = await supabasePublic
       .from('deals')
       .select('store')
       .eq('is_active', true);
@@ -237,14 +246,15 @@ app.get('/api/stats', async (req, res) => {
       },
     });
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    console.error('GET /api/stats error:', err);
+    res.status(500).json({ error: 'Failed to fetch stats' });
   }
 });
 
 // GET /api/deals/:id — Single deal
 app.get('/api/deals/:id', async (req, res) => {
   try {
-    const { data, error } = await supabaseAdmin
+    const { data, error } = await supabasePublic
       .from('deals')
       .select('*')
       .eq('id', req.params.id)
@@ -257,7 +267,8 @@ app.get('/api/deals/:id', async (req, res) => {
 
     res.json({ success: true, deal: data });
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    console.error('GET /api/deals/:id error:', err);
+    res.status(500).json({ error: 'Failed to fetch deal' });
   }
 });
 
@@ -279,7 +290,8 @@ app.post('/api/deals/:id/vote', async (req, res) => {
 
     res.json({ success: true });
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    console.error('POST /api/deals/:id/vote error:', err);
+    res.status(500).json({ error: 'Failed to record vote' });
   }
 });
 
@@ -297,7 +309,8 @@ app.post('/api/deals/:id/click', async (req, res) => {
 
     res.json({ success: true });
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    console.error('POST /api/deals/:id/click error:', err);
+    res.status(500).json({ error: 'Failed to record click' });
   }
 });
 
@@ -306,7 +319,7 @@ app.get('/api/categories', async (req, res) => {
   try {
     const country = req.query.country || 'US';
 
-    const { data } = await supabaseAdmin
+    const { data } = await supabasePublic
       .from('deals')
       .select('category, tags')
       .eq('is_active', true)
@@ -321,7 +334,8 @@ app.get('/api/categories', async (req, res) => {
 
     res.json({ success: true, counts });
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    console.error('GET /api/categories error:', err);
+    res.status(500).json({ error: 'Failed to fetch categories' });
   }
 });
 
@@ -397,23 +411,42 @@ app.post('/api/deals', requireApiKey, async (req, res) => {
     });
   } catch (err) {
     console.error('POST /api/deals error:', err);
-    res.status(500).json({ error: err.message });
+    res.status(500).json({ error: 'Failed to upsert deals' });
   }
 });
 
 // PATCH /api/deals/:id — Update a single deal
+const ALLOWED_PATCH_FIELDS = [
+  'title', 'description', 'category', 'store', 'store_color', 'emoji',
+  'price', 'original_price', 'discount_percent', 'currency', 'coupon_code',
+  'deal_url', 'affiliate_url', 'image_url', 'location', 'destination',
+  'votes', 'comments_count', 'tags', 'shipping_info', 'is_active',
+  'is_verified', 'is_featured', 'country', 'asin', 'auto_expire_hours',
+  'expires_at',
+];
 app.patch('/api/deals/:id', requireApiKey, async (req, res) => {
   try {
+    const updates = {};
+    for (const key of Object.keys(req.body)) {
+      if (ALLOWED_PATCH_FIELDS.includes(key)) {
+        updates[key] = req.body[key];
+      }
+    }
+    if (Object.keys(updates).length === 0) {
+      return res.status(400).json({ error: 'No valid fields to update' });
+    }
+
     const { data, error } = await supabaseAdmin
       .from('deals')
-      .update(req.body)
+      .update(updates)
       .eq('id', req.params.id)
       .select();
 
     if (error) throw error;
     res.json({ success: true, deal: data?.[0] });
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    console.error('PATCH /api/deals/:id error:', err);
+    res.status(500).json({ error: 'Failed to update deal' });
   }
 });
 
@@ -428,7 +461,8 @@ app.delete('/api/deals/:id', requireApiKey, async (req, res) => {
     if (error) throw error;
     res.json({ success: true, message: 'Deal deactivated' });
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    console.error('DELETE /api/deals/:id error:', err);
+    res.status(500).json({ error: 'Failed to deactivate deal' });
   }
 });
 
@@ -439,7 +473,8 @@ app.post('/api/expire', requireApiKey, async (req, res) => {
     if (error) throw error;
     res.json({ success: true, expired: data, message: `Expired ${data} deals` });
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    console.error('POST /api/expire error:', err);
+    res.status(500).json({ error: 'Failed to expire deals' });
   }
 });
 
@@ -462,7 +497,8 @@ app.post('/api/deals/bulk-deactivate', requireApiKey, async (req, res) => {
 
     res.json({ success: true, deactivated: count });
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    console.error('POST /api/deals/bulk-deactivate error:', err);
+    res.status(500).json({ error: 'Failed to bulk deactivate deals' });
   }
 });
 
@@ -477,7 +513,8 @@ app.get('/api/sources', async (req, res) => {
     if (error) throw error;
     res.json({ success: true, sources: data });
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    console.error('GET /api/sources error:', err);
+    res.status(500).json({ error: 'Failed to fetch sources' });
   }
 });
 
