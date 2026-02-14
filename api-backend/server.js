@@ -490,11 +490,11 @@ app.post('/api/scrape', requireApiKey, async (req, res) => {
       const title = tMatch[1].trim();
       if (title.length < 10 || title === 'SlickDeals') continue;
       const lMatch = block.match(/<link>(https:\/\/slickdeals[^<]+)<\/link>/);
-      // Extract image from content:encoded, enclosure, or media:content
-      const imgMatch = block.match(/<enclosure[^>]+url="([^"]+)"/) ||
+      // Extract image: SlickDeals uses src="https://static.slickdealscdn.com/attachment/.../300x300/...thumb"
+      const imgMatch = block.match(/src="(https:\/\/static\.slickdealscdn\.com\/attachment[^"]+)"/) ||
+                       block.match(/<enclosure[^>]+url="([^"]+)"/) ||
                        block.match(/<media:content[^>]+url="([^"]+)"/) ||
-                       block.match(/<media:thumbnail[^>]+url="([^"]+)"/) ||
-                       block.match(/<img[^>]+src="(https?:\/\/[^"]+(?:\.jpg|\.png|\.webp)[^"]*)"/i);
+                       block.match(/<img[^>]+src="(https?:\/\/[^"]+(?:\.jpg|\.jpeg|\.png|\.webp|\.gif)[^"]*)"/i);
       const store = detectStore(title);
       const price = parsePrice(title);
       const origPrice = price > 0 ? Math.round(price * 1.35) : 0;
@@ -533,8 +533,7 @@ app.post('/api/scrape', requireApiKey, async (req, res) => {
       const lMatch = block.match(/<link>(https?:\/\/[^<]+)<\/link>/);
       const imgMatch = block.match(/<enclosure[^>]+url="([^"]+)"/) ||
                        block.match(/<media:content[^>]+url="([^"]+)"/) ||
-                       block.match(/<media:thumbnail[^>]+url="([^"]+)"/) ||
-                       block.match(/<img[^>]+src="(https?:\/\/[^"]+(?:\.jpg|\.png|\.webp)[^"]*)"/i);
+                       block.match(/src="(https?:\/\/[^"]+(?:\.jpg|\.jpeg|\.png|\.webp|\.gif|\.thumb)[^"]*)"/i);
       const store = detectStore(title);
       const price = parsePrice(title);
       const origPrice = price > 0 ? Math.round(price * 1.4) : 0;
