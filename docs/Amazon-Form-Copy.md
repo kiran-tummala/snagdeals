@@ -5,11 +5,11 @@ Use these exact entries when Amazon asks for site URL, description, traffic, etc
 ---
 
 ## Website / URL (primary)
-https://www.tiktok.com/@snagdeals
+https://www.tiktok.com/@snagdeals.cc
 
 ## Additional Channels (copy-paste into "Other channels / social profiles")
-https://www.instagram.com/snagdeals
-https://www.youtube.com/@snagdeals
+https://www.instagram.com/snagdeals.cc
+https://www.youtube.com/@snagdeals.c
 
 ## Content Description (paste into description box)
 Daily curated deals and short-form videos posted across TikTok, Instagram and YouTube. Content covers discounted products, limited-time flight/hotel/activity deals, and free/discounted ebooks. Posts include product images, concise deal details, and affiliate links to complete purchases.
@@ -46,9 +46,9 @@ Carrd content (copy into a Carrd site block):
 
 Title: SnagDeals — Daily Best Deals
 Subtitle: Curated discounted products, flights, hotels and ebooks — posted daily on TikTok.
-Button 1: Follow on TikTok -> https://www.tiktok.com/@snagdeals
-Button 2: Instagram -> https://www.instagram.com/snagdeals
-Button 3: YouTube -> https://www.youtube.com/@snagdeals
+Button 1: Follow on TikTok -> https://www.tiktok.com/@snagdeals.cc
+Button 2: Instagram -> https://www.instagram.com/snagdeals.cc
+Button 3: YouTube -> https://www.youtube.com/@snagdeals.c
 
 Meta description (for Carrd): Daily deal alerts and short video deals — follow on TikTok/Instagram/YouTube.
 
