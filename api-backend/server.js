@@ -45,6 +45,9 @@ const DATABASE_URL = process.env.DATABASE_URL;
 const PORT = process.env.PORT || 3001;
 const API_SECRET = process.env.API_SECRET;
 const AMAZON_TAG = process.env.AMAZON_TAG || 'snagdeals052-20';
+const AMADEUS_KEY = process.env.AMADEUS_CLIENT_ID;
+const AMADEUS_SECRET = process.env.AMADEUS_CLIENT_SECRET;
+const AMADEUS_BASE = 'https://test.api.amadeus.com';
 
 if (!DATABASE_URL) {
   console.error('Missing required env var: DATABASE_URL');
@@ -457,6 +460,86 @@ app.get('/api/sources', async (req, res) => {
   } catch (err) {
     console.error('GET /api/sources error:', err);
     res.status(500).json({ error: 'Failed to fetch sources' });
+  }
+});
+
+// ================================================================
+// HOTEL SEARCH — Real hotel listings via Amadeus API
+// ================================================================
+let amadeusToken = null;
+let amadeusTokenExp = 0;
+
+async function getAmadeusToken() {
+  if (amadeusToken && Date.now() < amadeusTokenExp) return amadeusToken;
+  const r = await fetch(`${AMADEUS_BASE}/v1/security/oauth2/token`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    body: `grant_type=client_credentials&client_id=${AMADEUS_KEY}&client_secret=${AMADEUS_SECRET}`
+  });
+  const d = await r.json();
+  if (!d.access_token) throw new Error('Amadeus auth failed: ' + JSON.stringify(d));
+  amadeusToken = d.access_token;
+  amadeusTokenExp = Date.now() + (d.expires_in - 120) * 1000;
+  return amadeusToken;
+}
+
+app.get('/api/hotels/search', async (req, res) => {
+  try {
+    const { city, checkin, checkout, adults = '2' } = req.query;
+    if (!city) return res.status(400).json({ error: 'city parameter required' });
+
+    if (!AMADEUS_KEY || !AMADEUS_SECRET) {
+      return res.status(503).json({ error: 'not_configured', message: 'Add AMADEUS_CLIENT_ID and AMADEUS_CLIENT_SECRET to .env (free at developers.amadeus.com)' });
+    }
+
+    const token = await getAmadeusToken();
+    const auth = { Authorization: `Bearer ${token}` };
+
+    // 1. Resolve city name → IATA code
+    const cityResp = await fetch(`${AMADEUS_BASE}/v1/reference-data/locations/cities?keyword=${encodeURIComponent(city.split(',')[0].trim())}&max=1`, { headers: auth });
+    const cityData = await cityResp.json();
+    if (!cityData.data?.length) return res.json({ hotels: [], city });
+
+    const cityCode = cityData.data[0].iataCode;
+
+    // 2. Get hotels in the city
+    const htlResp = await fetch(`${AMADEUS_BASE}/v1/reference-data/locations/hotels/by-city?cityCode=${cityCode}&radius=30&radiusUnit=KM&ratings=3,4,5&hotelSource=ALL`, { headers: auth });
+    const htlData = await htlResp.json();
+    if (!htlData.data?.length) return res.json({ hotels: [], city: cityCode });
+
+    // Take top 20 hotels
+    const hotelIds = htlData.data.slice(0, 20).map(h => h.hotelId);
+
+    // 3. Get prices/offers
+    const ci = checkin || new Date(Date.now() + 86400000).toISOString().split('T')[0];
+    const co = checkout || new Date(Date.now() + 2 * 86400000).toISOString().split('T')[0];
+    const offResp = await fetch(`${AMADEUS_BASE}/v3/shopping/hotel-offers?hotelIds=${hotelIds.join(',')}&adults=${adults}&checkInDate=${ci}&checkOutDate=${co}&currency=USD&bestRateOnly=true`, { headers: auth });
+    const offData = await offResp.json();
+
+    if (!offData.data?.length) return res.json({ hotels: [], city: cityCode });
+
+    const nights = Math.max(1, Math.round((new Date(co) - new Date(ci)) / 86400000));
+    const hotels = offData.data.map(h => {
+      const offer = h.offers?.[0];
+      const total = parseFloat(offer?.price?.total) || 0;
+      return {
+        name: h.hotel.name,
+        id: h.hotel.hotelId,
+        stars: parseInt(h.hotel.rating) || 0,
+        total,
+        perNight: Math.round(total / nights),
+        currency: offer?.price?.currency || 'USD',
+        room: offer?.room?.description?.text || 'Standard Room',
+        nights,
+        checkIn: ci,
+        checkOut: co
+      };
+    }).filter(h => h.total > 0).sort((a, b) => a.perNight - b.perNight);
+
+    res.json({ hotels, city: cityCode });
+  } catch (err) {
+    console.error('Hotel search error:', err.message);
+    res.status(500).json({ error: 'search_failed', message: err.message });
   }
 });
 
