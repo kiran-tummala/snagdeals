@@ -142,7 +142,16 @@ app.get('/api/deals', async (req, res) => {
     const sql = `SELECT * FROM deals WHERE ${conditions.join(' AND ')} ORDER BY ${orderBy} LIMIT $${paramIdx++} OFFSET $${paramIdx++}`;
     params.push(lim, off);
 
-    const { rows } = await pool.query(sql, params);
+    let { rows } = await pool.query(sql, params);
+
+    // Fall back to US deals if no deals found for the requested country
+    if (rows.length === 0 && country && country.toUpperCase() !== 'US') {
+      const fallbackParams = params.slice();
+      // Replace the country param (always first param) with 'US'
+      fallbackParams[0] = 'US';
+      const fallbackResult = await pool.query(sql, fallbackParams);
+      rows = fallbackResult.rows;
+    }
 
     const deals = rows.map(d => ({
       id: d.id,

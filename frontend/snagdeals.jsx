@@ -160,9 +160,12 @@ function PriceRows({prices,unit}){
   );
 }
 
-function DealCard({d,onAlert,watching,idx}){
+function DealCard({d,onAlert,watching,idx,userCountry='US'}){
   const isH=d.cat==='hotel',isF=d.cat==='travel',isCr=d.cat==='cruise',isAb=d.cat==='airbnb',isR=d.cat==='restaurant';
   const unit=isH||isAb?'/night':isF||isCr?'/person':'';
+  const cs=getCurrencySymbol(userCountry);
+  const lp=convertPrice(d.price,userCountry);
+  const lo=convertPrice(d.orig,userCountry);
   const hot=d.tags.includes('hot'),isFree=d.price===0;
   return(
     <div className="deal-card" style={{display:'flex',gap:14,padding:16,background:'var(--card)',border:'1px solid var(--border)',borderRadius:16,transition:'all .25s cubic-bezier(.4,0,.2,1)',cursor:'pointer',position:'relative',overflow:'hidden',animationDelay:`${(idx||0)*30}ms`}}
@@ -206,13 +209,13 @@ function DealCard({d,onAlert,watching,idx}){
           {isFree?(
             <>
               <span style={{fontFamily:'var(--font-display)',fontWeight:900,fontSize:22,background:'linear-gradient(135deg,var(--green),#34d399)',WebkitBackgroundClip:'text',WebkitTextFillColor:'transparent'}}>FREE</span>
-              {d.orig>0&&<span style={{fontSize:13,color:'var(--muted)',textDecoration:'line-through'}}>${d.orig}</span>}
+              {d.orig>0&&<span style={{fontSize:13,color:'var(--muted)',textDecoration:'line-through'}}>{cs}{lo}</span>}
               <span style={{fontSize:10,fontWeight:800,color:'#ef4444',background:'rgba(239,68,68,0.08)',padding:'3px 8px',borderRadius:20}}>100% OFF</span>
             </>
           ):d.price>0?(
             <>
-              <span style={{fontFamily:'var(--font-display)',fontWeight:900,fontSize:22,color:'var(--green)'}}>${d.price}<span style={{fontSize:12,fontWeight:500,color:'var(--muted)'}}>{unit}</span></span>
-              {d.orig>0&&<span style={{fontSize:13,color:'var(--muted)',textDecoration:'line-through'}}>${d.orig}</span>}
+              <span style={{fontFamily:'var(--font-display)',fontWeight:900,fontSize:22,color:'var(--green)'}}>{cs}{lp}<span style={{fontSize:12,fontWeight:500,color:'var(--muted)'}}>{unit}</span></span>
+              {d.orig>0&&<span style={{fontSize:13,color:'var(--muted)',textDecoration:'line-through'}}>{cs}{lo}</span>}
               {d.off>0&&<span style={{fontSize:10,fontWeight:800,color:'#ef4444',background:'rgba(239,68,68,0.08)',padding:'3px 8px',borderRadius:20}}>-{d.off}%</span>}
             </>
           ):null}
@@ -672,7 +675,7 @@ input:focus, select:focus { border-color: var(--accent) !important; box-shadow: 
     <div style={{display:'flex',flexDirection:'column',gap:8}}>
       {loading&&<div style={{textAlign:'center',padding:40}}><div style={{display:'inline-block',width:32,height:32,border:'3px solid var(--border)',borderTopColor:'var(--accent)',borderRadius:'50%',animation:'spin 0.8s linear infinite'}}/><style>{`@keyframes spin{to{transform:rotate(360deg)}}`}</style><div style={{fontSize:12,color:'var(--muted)',marginTop:8}}>Refreshing deals...</div></div>}
       {!loading&&filtered.length===0&&query.trim().length>0?<ProductSearch query={query} showToast={showToast}/>:!loading&&filtered.length===0?<div style={{textAlign:'center',padding:80,color:'var(--muted)',fontSize:14}}>No deals in this category yet</div>:null}
-      {filtered.map((d,i)=><DealCard key={d.id} d={d} idx={i} onAlert={quickAlert} watching={isWatching(d)}/>)}
+      {filtered.map((d,i)=><DealCard key={d.id} d={d} idx={i} onAlert={quickAlert} watching={isWatching(d)} userCountry={userCountry}/>)}
     </div>
   </div>
 
@@ -717,7 +720,7 @@ input:focus, select:focus { border-color: var(--accent) !important; box-shadow: 
         <div key={d.id} className="trend-row" style={{display:'flex',alignItems:'center',gap:10,padding:'8px 8px',borderRadius:8,cursor:'pointer',transition:'background .15s'}}>
           <span style={{fontFamily:'var(--font-display)',fontWeight:900,fontSize:14,color:i<3?'var(--accent)':'var(--muted)',minWidth:22,textAlign:'center'}}>{i+1}</span>
           <span style={{fontSize:12,color:'var(--text-secondary)',flex:1,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap',fontWeight:500}}>{d.title}</span>
-          <span style={{fontSize:12,fontWeight:800,color:'var(--green)',whiteSpace:'nowrap',fontFamily:'var(--font-mono)'}}>{d.price>0?`$${d.price}`:''}</span>
+          <span style={{fontSize:12,fontWeight:800,color:'var(--green)',whiteSpace:'nowrap',fontFamily:'var(--font-mono)'}}>{d.price>0?`${getCurrencySymbol(userCountry)}${convertPrice(d.price,userCountry)}`:''}</span>
         </div>
       ))}
     </div>
