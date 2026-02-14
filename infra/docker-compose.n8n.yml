@@ -34,6 +34,9 @@ services:
     environment:
       - DATABASE_URL=${DATABASE_URL}
       - API_SECRET=${API_SECRET}
+      - AMAZON_TAG=${AMAZON_TAG:-snagdeals052-20}
+      - AMADEUS_CLIENT_ID=${AMADEUS_CLIENT_ID}
+      - AMADEUS_CLIENT_SECRET=${AMADEUS_CLIENT_SECRET}
       - CORS_ORIGINS=https://snagdeals.cc,https://www.snagdeals.cc
       - PORT=3001
       - NODE_ENV=production
