@@ -1,0 +1,7 @@
+## cloud-init to bootstrap the server: git clone repo and run setup
+#cloud-config
+packages:
+  - git
+runcmd:
+  - [ bash, -lc, 'cd /root && git clone https://github.com/kiran-tummala/snagdeals.git || (cd snagdeals && git pull)' ]
+  - [ bash, -lc, 'cd /root/snagdeals/infra && chmod +x setup.sh && sudo ./setup.sh YOUR_DOMAIN_HERE' ]

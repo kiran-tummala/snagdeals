@@ -1,0 +1,9 @@
+[Unit]
+Description=Daily timer for SnagDeals auto-update
+
+[Timer]
+OnCalendar=daily
+Persistent=true
+
+[Install]
+WantedBy=timers.target

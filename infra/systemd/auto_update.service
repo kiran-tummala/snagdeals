@@ -1,0 +1,12 @@
+[Unit]
+Description=SnagDeals auto-update (pull images + restart containers)
+After=network.target docker.service
+Requires=docker.service
+
+[Service]
+Type=oneshot
+ExecStart=/opt/snagdeals/auto_update.sh
+User=root
+
+[Install]
+WantedBy=multi-user.target
