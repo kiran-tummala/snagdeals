@@ -20,7 +20,6 @@ systemctl enable --now docker
 
 mkdir -p /opt/snagdeals
 cp ./docker-compose.n8n.yml /opt/snagdeals/docker-compose.yml || true
-chown -R $SUDO_USER:$SUDO_USER /opt/snagdeals
 
 echo "Setting up firewall (allow OpenSSH, HTTP, HTTPS)..."
 ufw allow OpenSSH
@@ -30,7 +29,10 @@ ufw --force enable
 
 echo "Creating webroot for certbot..."
 mkdir -p /var/www/certbot
-chown -R $SUDO_USER:$SUDO_USER /var/www/certbot
+
+echo "Deploying frontend to /var/www/snagdeals..."
+mkdir -p /var/www/snagdeals
+cp -r ../frontend/dist/* /var/www/snagdeals/ || echo "Warning: frontend/dist not found — build frontend first"
 
 echo "Copy nginx config template and replace domain placeholder..."
 mkdir -p /etc/nginx/sites-available /etc/nginx/sites-enabled
@@ -42,8 +44,8 @@ echo "Testing nginx config and reloading..."
 nginx -t
 systemctl reload nginx
 
-echo "Run certbot to obtain TLS certificates (interactive)..."
-certbot --nginx -d ${DOMAIN}
+echo "Run certbot to obtain TLS certificates..."
+certbot --nginx -d ${DOMAIN} -d n8n.${DOMAIN}
 
 echo "Place your .env file at /opt/snagdeals/.env with DB and secrets, then run:"
 echo "  cd /opt/snagdeals && docker compose up -d"
