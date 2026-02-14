@@ -123,6 +123,70 @@ vercel --prod
 
 ---
 
+### Step 4b: Register a Domain on Namecheap (Optional, ~$12/year)
+
+While `snagdeals.vercel.app` is perfectly fine, a custom domain looks more professional and builds brand credibility.
+
+#### 1. Purchase a Domain (3 minutes)
+
+1. Go to **namecheap.com**
+2. Search for your desired domain (e.g., `snagdeals.co`, `snagdeals.deals`, `snagdeals.app`)
+3. Click **"Add to Cart"** → **"View Cart"**
+4. Proceed to checkout
+   - **IMPORTANT:** Disable "Namecheap Premium DNS" (you don't need it — use Vercel's DNS)
+   - **IMPORTANT:** Disable "WhoisGuard" (optional, but costs extra)
+5. Complete payment
+6. You now own the domain! ✅
+
+#### 2. Connect Domain to Vercel (5 minutes)
+
+1. Go to **vercel.com → Your Project (snagdeals)**
+2. Click **"Settings" → "Domains"**
+3. Under "Add Domain" → Type your domain: `snagdeals.co`
+4. Click **"Add"**
+5. Vercel shows you **4 nameservers**:
+   ```
+   ns1.vercel-dns.com
+   ns2.vercel-dns.com
+   ns3.vercel-dns.com
+   ns4.vercel-dns.com
+   ```
+
+#### 3. Update Namecheap Nameservers (5 minutes)
+
+1. Go back to **namecheap.com → Account → Manage Domains**
+2. Click your domain name → **"Manage"**
+3. Scroll down to **"Nameservers"** section
+4. Change from **"Namecheap Default"** to **"Custom DNS"**
+5. Paste the 4 Vercel nameservers:
+   ```
+   ns1.vercel-dns.com
+   ns2.vercel-dns.com
+   ns3.vercel-dns.com
+   ns4.vercel-dns.com
+   ```
+6. Click **"Save"** → DNS propagates in **5-30 minutes**
+
+#### 4. Verify & Test (2 minutes)
+
+1. Back in Vercel, wait ~10 minutes for DNS propagation
+2. Your domain should show **"Verified"** with a green checkmark
+3. Visit `https://snagdeals.co` — it should load your app! 🎉
+4. Update your frontend code if you've hardcoded any URLs:
+   ```javascript
+   const API_URL = 'https://your-snagdeals-api.up.railway.app';
+   const DOMAIN_URL = 'https://snagdeals.co'; // Update this
+   ```
+5. Redeploy: `vercel --prod`
+
+#### SSL Certificate (Automatic)
+
+- Vercel auto-generates a free SSL certificate for your custom domain
+- Your site is immediately **HTTPS-secure** ✅
+- No additional setup needed
+
+---
+
 ### Step 5: Seed the Database
 
 ```bash
@@ -464,6 +528,308 @@ Before aggressive posting, build credibility:
 
 ---
 
+## Part 5: Multi-Project n8n Setup (4 Workflows)
+
+If you're deploying **4 separate deal projects** with n8n automation, use this guide to set them up efficiently.
+
+### Option A: n8n Cloud (Easiest but €96/mo for 4 projects)
+
+#### Setup for Each Project:
+
+**Project 1: SnagDeals (Deals Aggregation)**
+```
+n8n Account: project1@email.com
+Organization: SnagDeals
+Workflows:
+  - n8n-social-posting-v5-fixed.json (Telegram + Reddit posting)
+  - 03-n8n-workflow-v6-live.json (Deal scraping)
+```
+
+**Project 2: TravelDeals (Travel-specific)**
+```
+n8n Account: project2@email.com
+Organization: TravelDeals
+Workflows:
+  - Travel deal scraping + hotel price drops
+  - Multi-channel posting (Telegram, Reddit r/travel, Twitter)
+```
+
+**Project 3: TechDeals (Electronics/Tech)**
+```
+n8n Account: project3@email.com
+Organization: TechDeals
+Workflows:
+  - Tech product deals + price tracking
+  - Multi-channel posting (Telegram, Reddit r/buildapcsales, YouTube)
+```
+
+**Project 4: FlightDeals (Flight aggregation)**
+```
+n8n Account: project4@email.com
+Organization: FlightDeals
+Workflows:
+  - Flight price alerts + deal notifications
+  - Multi-channel posting (Telegram, Discord, Email)
+```
+
+#### Setup Steps (Repeat for each project):
+
+1. **Create n8n Cloud Workspace**
+   - Go to **n8n.io** → Click **"Sign up for cloud"**
+   - Use separate email for each project (or use sub-emails: project1@gmail.com, project1+2@gmail.com, etc.)
+   - Create organization for each project
+
+2. **Import Workflows**
+   - Click **"Add → Import from File"**
+   - Upload your `.json` workflow files
+   - **Don't activate yet** — need to configure credentials first
+
+3. **Add Credentials (Settings → Credentials)**
+   - **Telegram:**
+     - Search "Telegram"
+     - Paste bot token: `7123456789:AAF...`
+     - Name: `Telegram_[ProjectName]`
+   - **Reddit:**
+     - Search "HTTP Basic Auth"
+     - Username: Your Reddit app CLIENT_ID
+     - Password: Your Reddit app SECRET
+     - Name: `Reddit_OAuth_[ProjectName]`
+   - **Any other APIs** (Twitter, Facebook, etc.)
+
+4. **Set Environment Variables (Settings → Variables)**
+   ```
+   SNAGDEALS_API_URL=https://your-api.railway.app
+   SNAGDEALS_API_SECRET=snagdeals-n8n-secret-2026
+   REDDIT_USERNAME=YourRedditUsername
+   REDDIT_PASSWORD=YourRedditPassword
+   ```
+
+5. **Update Workflow Nodes**
+   - Open each workflow
+   - Replace placeholder channel IDs/usernames with actual values
+   - Test execute workflow
+   - Enable scheduling (e.g., "Every 30 minutes")
+
+6. **Activate All Workflows** ✅
+   - Toggle each workflow to **"Active"**
+   - Monitor first 24 hours for errors
+
+---
+
+### Option B: Self-Hosted n8n (RECOMMENDED - €0 + $5/mo VPS for 4 projects)
+
+This is **much cheaper** and recommended for managing 4 projects.
+
+#### 1. Choose a VPS Provider
+
+| Provider | Cost | Setup Time | Best For |
+|----------|------|-----------|----------|
+| **DigitalOcean** | $5/mo | 5 min | Beginners, simple setup |
+| **Linode** | $5/mo | 5 min | Good uptime, support |
+| **Hetzner** | $4/mo | 10 min | Best value, EU-based |
+| **Vultr** | $2.50/mo | 5 min | Very cheap, global |
+
+**Specs needed (for 4 projects):**
+- 2GB RAM minimum (1GB per large project)
+- 20GB SSD storage
+- Ubuntu 22.04 LTS
+
+#### 2. Deploy n8n on Your VPS
+
+**Step 1: SSH into your VPS**
+```bash
+ssh root@your.vps.ip.address
+```
+
+**Step 2: Install Docker**
+```bash
+curl -fsSL https://get.docker.com -o get-docker.sh
+sudo sh get-docker.sh
+sudo usermod -aG docker $USER
+```
+
+**Step 3: Create n8n Docker setup**
+```bash
+mkdir -p ~/n8n-data
+cd ~/n8n-data
+
+# Create docker-compose.yml
+cat > docker-compose.yml << 'EOF'
+version: '3.8'
+services:
+  n8n:
+    image: n8nio/n8n:latest
+    container_name: n8n
+    ports:
+      - "5678:5678"
+    environment:
+      - N8N_HOST=your.vps.ip.address
+      - N8N_PORT=5678
+      - N8N_PROTOCOL=http
+      - WEBHOOK_URL=http://your.vps.ip.address:5678/
+      - N8N_BASIC_AUTH_ACTIVE=true
+      - N8N_BASIC_AUTH_USER=admin
+      - N8N_BASIC_AUTH_PASSWORD=your_secure_password_here
+      - N8N_ENCRYPTION_KEY=your-32-char-encryption-key-here
+      - TZ=America/New_York
+    volumes:
+      - ./n8n_data:/home/node/.n8n
+    restart: unless-stopped
+    networks:
+      - n8n-network
+
+networks:
+  n8n-network:
+    driver: bridge
+EOF
+```
+
+**Step 4: Start n8n**
+```bash
+docker-compose up -d
+```
+
+**Step 5: Access n8n**
+- Open `http://your.vps.ip.address:5678`
+- Login with admin credentials from Step 3
+- You're now running n8n! ✅
+
+#### 3. Set Up SSL (HTTPS) with Let's Encrypt
+
+```bash
+# Install Certbot
+sudo apt-get update
+sudo apt-get install certbot python3-certbot-nginx -y
+
+# Get certificate (replace with your domain)
+sudo certbot certonly --standalone -d yourdomain.com
+
+# Update docker-compose.yml to use HTTPS
+# Add to volumes:
+#   - /etc/letsencrypt:/etc/letsencrypt:ro
+# Update environment:
+#   - N8N_PROTOCOL=https
+```
+
+#### 4. Set Up Reverse Proxy (Optional but Recommended)
+
+Using **Nginx** to handle SSL:
+
+```bash
+# Install Nginx
+sudo apt-get install nginx -y
+
+# Create Nginx config
+sudo cat > /etc/nginx/sites-available/n8n << 'EOF'
+server {
+    listen 80;
+    server_name yourdomain.com;
+
+    location / {
+        proxy_pass http://localhost:5678;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+}
+EOF
+
+# Enable site
+sudo ln -s /etc/nginx/sites-available/n8n /etc/nginx/sites-enabled/
+
+# Test & reload
+sudo nginx -t
+sudo systemctl reload nginx
+```
+
+#### 5. Import Your 4 Workflows
+
+1. Go to n8n dashboard (http://yourdomain.com)
+2. Click **"Projects"** → **"New"** → Name: `Project 1: SnagDeals`
+3. Click **"Add Workflow"** → **"Import from File"**
+4. Upload `n8n-social-posting-v5-fixed.json`
+5. **Repeat for all 4 projects** (or create separate projects)
+
+#### 6. Configure Credentials Per Project
+
+For each project, add credentials:
+
+**Telegram (for all 4 projects)**
+1. Settings → Credentials → **New**
+2. Type: `Telegram`
+3. Paste bot token
+4. Name: `Telegram_SnagDeals`, `Telegram_TravelDeals`, etc.
+
+**Reddit (for all 4 projects)**
+1. Settings → Credentials → **New**
+2. Type: `HTTP Basic Auth`
+3. Username: Reddit CLIENT_ID
+4. Password: Reddit SECRET
+5. Name: `Reddit_OAuth_Project1`, etc.
+
+#### 7. Set Workflow Schedules
+
+For each workflow:
+1. Open workflow
+2. Click **"Trigger Node"** (usually the first node)
+3. Set **"Execution"** → **"Schedule"**:
+   - Every 30 minutes for deal scraping
+   - Every 6 hours for posting (to avoid spam)
+
+#### 8. Monitor All Projects
+
+**View logs in real-time:**
+```bash
+docker logs -f n8n
+```
+
+**Check if container is running:**
+```bash
+docker ps | grep n8n
+```
+
+**Restart if needed:**
+```bash
+docker-compose restart
+```
+
+---
+
+### Credentials Checklist for 4 Projects
+
+Create this table and fill in each project:
+
+| Project | Telegram Bot | Telegram Channel | Reddit Account | Reddit Client ID | Reddit Secret | API URL | API Secret |
+|---------|---|---|---|---|---|---|---|
+| **SnagDeals** | @SnagDealsBot | @SnagDealsDeals | SnagDealsDeals | abc123... | xyz789... | https://api.railway.app | secret-key |
+| **TravelDeals** | @TravelDealsBot | @TravelDealsHub | TravelDealsBot | def456... | uvw123... | https://travel-api.railway.app | secret-key |
+| **TechDeals** | @TechDealsBot | @TechDealsHub | TechDealsBot | ghi789... | rst456... | https://tech-api.railway.app | secret-key |
+| **FlightDeals** | @FlightDealsBot | @FlightDealsHub | FlightDealsBot | jkl012... | pqr789... | https://flight-api.railway.app | secret-key |
+
+---
+
+### Scaling n8n (for future growth)
+
+If you need **more power** as your projects grow:
+
+**Option 1: Upgrade VPS**
+- $10-20/mo gets you 4GB RAM + better CPU
+- Run all 4 projects comfortably
+
+**Option 2: Separate VPS per project**
+- Project 1 on VPS A ($5)
+- Project 2 on VPS B ($5)
+- Project 3 on VPS C ($5)
+- Project 4 on VPS D ($5)
+- Total: **$20/mo** but better isolation/reliability
+
+**Option 3: Switch to n8n Cloud (only for high-volume)**
+- €24/mo per project workspace
+- Total: **€96/mo** (overkill for most use cases)
+
+---
+
 ## Quick Reference: All Credentials Needed
 
 | Service | What You Need | Where to Get It |
@@ -476,6 +842,8 @@ Before aggressive posting, build credibility:
 | **Amazon Associates** | Affiliate Tag | affiliate-program.amazon.com |
 | **Travelpayouts** | API Token | travelpayouts.com |
 | **Google Analytics** | Measurement ID | analytics.google.com |
+| **n8n Cloud** | Account + workspace | n8n.io (€24/mo per project) |
+| **VPS (DigitalOcean/Linode)** | Server IP + credentials | digitalocean.com or linode.com ($5/mo) |
 
 ---
 
