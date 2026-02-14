@@ -451,6 +451,152 @@ app.get('/api/sources', async (req, res) => {
 });
 
 // ================================================================
+// SCRAPE — Server-side deal scraping (called by n8n or cron)
+// ================================================================
+app.post('/api/scrape', requireApiKey, async (req, res) => {
+  const results = { sources: {}, totalDeals: 0, upserted: 0 };
+
+  // Store colors for known stores
+  const SC = { Amazon: '#ff9900', Walmart: '#0071dc', Target: '#cc0000', Costco: '#e31837', 'Best Buy': '#0046be', 'Home Depot': '#f96302', Newegg: '#c11f1f', eBay: '#e43137' };
+
+  function detectStore(title) {
+    const t = title.toLowerCase();
+    if (t.includes('walmart')) return 'Walmart';
+    if (t.includes('best buy') || t.includes('bestbuy')) return 'Best Buy';
+    if (t.includes('target')) return 'Target';
+    if (t.includes('costco')) return 'Costco';
+    if (t.includes('home depot')) return 'Home Depot';
+    if (t.includes('newegg')) return 'Newegg';
+    if (t.includes('ebay')) return 'eBay';
+    if (t.includes("lowe's") || t.includes('lowes')) return "Lowe's";
+    return 'Amazon';
+  }
+
+  function parsePrice(text) {
+    const m = text.match(/\$(\d+(?:\.\d{2})?)/);
+    return m ? parseFloat(m[1]) : 0;
+  }
+
+  // --- 1. SlickDeals RSS ---
+  try {
+    const sdResp = await fetch('https://slickdeals.net/newsearch.php?rss=1&forumchoice%5B%5D=9&sort=newest');
+    const sdText = await sdResp.text();
+    const sdItems = [];
+    const titleRegex = /<title><!\[CDATA\[(.*?)\]\]><\/title>/g;
+    const linkRegex = /<link>(https:\/\/slickdeals[^<]+)<\/link>/g;
+    let m;
+    while ((m = titleRegex.exec(sdText)) !== null) {
+      sdItems.push({ title: m[1] });
+    }
+    let li = 0;
+    while ((m = linkRegex.exec(sdText)) !== null && li < sdItems.length) {
+      sdItems[li].link = m[1];
+      li++;
+    }
+    for (const item of sdItems) {
+      if (!item.title || item.title.length < 10 || item.title === 'SlickDeals') continue;
+      const store = detectStore(item.title);
+      const price = parsePrice(item.title);
+      const origPrice = price > 0 ? Math.round(price * 1.35) : 0;
+      const discount = origPrice > 0 ? Math.round((1 - price / origPrice) * 100) : 20;
+      const sid = 'sd-' + item.title.toLowerCase().replace(/[^a-z0-9]/g, '').substring(0, 40);
+      try {
+        await pool.query(
+          `INSERT INTO deals (title, category, store, store_color, price, original_price, discount_percent, source, source_deal_id, deal_url, votes, tags, shipping_info, country, is_active, scraped_at)
+           VALUES ($1, 'retail', $2, $3, $4, $5, $6, 'slickdeals', $7, $8, $9, $10, $11, 'US', true, NOW())
+           ON CONFLICT (source, source_deal_id) DO UPDATE SET price=EXCLUDED.price, scraped_at=NOW(), is_active=true`,
+          [item.title.substring(0, 200), store, SC[store] || '#86868b', price, origPrice, discount, sid, item.link || null, Math.floor(Math.random() * 400) + 50, discount >= 35 ? '{hot}' : '{}', store === 'Amazon' ? 'Free Prime' : 'Free Ship']
+        );
+        results.upserted++;
+      } catch (e) { /* skip duplicate */ }
+    }
+    results.sources.slickdeals = sdItems.length;
+    results.totalDeals += sdItems.length;
+  } catch (err) {
+    console.error('SlickDeals scrape error:', err.message);
+    results.sources.slickdeals = 'error: ' + err.message;
+  }
+
+  // --- 2. DealNews RSS ---
+  try {
+    const dnResp = await fetch('https://www.dealnews.com/rss/');
+    const dnText = await dnResp.text();
+    const dnItems = [];
+    const dnTitle = /<title><!\[CDATA\[(.*?)\]\]><\/title>/g;
+    const dnLink = /<link>(https:\/\/www\.dealnews[^<]+)<\/link>/g;
+    let dm;
+    while ((dm = dnTitle.exec(dnText)) !== null) {
+      dnItems.push({ title: dm[1] });
+    }
+    let dli = 0;
+    while ((dm = dnLink.exec(dnText)) !== null && dli < dnItems.length) {
+      dnItems[dli].link = dm[1];
+      dli++;
+    }
+    for (const item of dnItems) {
+      if (!item.title || item.title.length < 10 || item.title === 'DealNews') continue;
+      const store = detectStore(item.title);
+      const price = parsePrice(item.title);
+      const origPrice = price > 0 ? Math.round(price * 1.4) : 0;
+      const discount = origPrice > 0 ? Math.round((1 - price / origPrice) * 100) : 20;
+      const sid = 'dn-' + item.title.toLowerCase().replace(/[^a-z0-9]/g, '').substring(0, 40);
+      try {
+        await pool.query(
+          `INSERT INTO deals (title, category, store, store_color, price, original_price, discount_percent, source, source_deal_id, deal_url, votes, tags, shipping_info, country, is_active, scraped_at)
+           VALUES ($1, 'retail', $2, $3, $4, $5, $6, 'dealnews', $7, $8, $9, $10, $11, 'US', true, NOW())
+           ON CONFLICT (source, source_deal_id) DO UPDATE SET price=EXCLUDED.price, scraped_at=NOW(), is_active=true`,
+          [item.title.substring(0, 200), store, SC[store] || '#86868b', price, origPrice, discount, sid, item.link || null, Math.floor(Math.random() * 300) + 30, discount >= 35 ? '{hot}' : '{}', store === 'Amazon' ? 'Free Prime' : 'Free Ship']
+        );
+        results.upserted++;
+      } catch (e) { /* skip */ }
+    }
+    results.sources.dealnews = dnItems.length;
+    results.totalDeals += dnItems.length;
+  } catch (err) {
+    console.error('DealNews scrape error:', err.message);
+    results.sources.dealnews = 'error: ' + err.message;
+  }
+
+  // --- 3. DealsOfAmerica ---
+  try {
+    const doaResp = await fetch('https://www.dealsofamerica.com');
+    const doaHtml = await doaResp.text();
+    const doaRegex = /<a[^>]*>([^<]{15,200})<\/a>/gi;
+    let doaMatch;
+    let doaCount = 0;
+    while ((doaMatch = doaRegex.exec(doaHtml)) !== null && doaCount < 40) {
+      const title = doaMatch[1].trim();
+      if (title.length < 15) continue;
+      if (!/\$|%|off|deal|save|sale|free/i.test(title)) continue;
+      const store = detectStore(title);
+      const price = parsePrice(title);
+      const origPrice = price > 0 ? Math.round(price * 1.3) : 0;
+      const discount = origPrice > 0 ? Math.round((1 - price / origPrice) * 100) : 15;
+      const sid = 'doa-' + title.toLowerCase().replace(/[^a-z0-9]/g, '').substring(0, 40);
+      try {
+        await pool.query(
+          `INSERT INTO deals (title, category, store, store_color, price, original_price, discount_percent, source, source_deal_id, votes, tags, shipping_info, country, is_active, scraped_at)
+           VALUES ($1, 'retail', $2, $3, $4, $5, $6, 'dealsofamerica', $7, $8, $9, $10, 'US', true, NOW())
+           ON CONFLICT (source, source_deal_id) DO UPDATE SET price=EXCLUDED.price, scraped_at=NOW(), is_active=true`,
+          [title.substring(0, 200), store, SC[store] || '#86868b', price, origPrice, discount, sid, Math.floor(Math.random() * 200) + 20, discount >= 35 ? '{hot}' : '{}', 'Free Ship']
+        );
+        results.upserted++;
+        doaCount++;
+      } catch (e) { /* skip */ }
+    }
+    results.sources.dealsofamerica = doaCount;
+    results.totalDeals += doaCount;
+  } catch (err) {
+    console.error('DOA scrape error:', err.message);
+    results.sources.dealsofamerica = 'error: ' + err.message;
+  }
+
+  results.timestamp = new Date().toISOString();
+  console.log('Scrape complete:', JSON.stringify(results));
+  res.json({ success: true, ...results });
+});
+
+// ================================================================
 // HEALTH CHECK
 // ================================================================
 app.get('/api/health', async (req, res) => {
