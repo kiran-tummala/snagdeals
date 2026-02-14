@@ -44,6 +44,7 @@ app.use(rateLimit(60000, 100));
 const DATABASE_URL = process.env.DATABASE_URL;
 const PORT = process.env.PORT || 3001;
 const API_SECRET = process.env.API_SECRET;
+const AMAZON_TAG = process.env.AMAZON_TAG || 'snagdeals052-20';
 
 if (!DATABASE_URL) {
   console.error('Missing required env var: DATABASE_URL');
@@ -169,7 +170,7 @@ app.get('/api/deals', async (req, res) => {
       tags: d.tags || [],
       ship: d.shipping_info || 'Free Ship',
       img: d.image_url,
-      url: d.affiliate_url || d.deal_url,
+      url: d.affiliate_url || (d.deal_url && d.deal_url.includes('amazon.com') && !d.deal_url.includes('tag=') ? `${d.deal_url}${d.deal_url.includes('?') ? '&' : '?'}tag=${AMAZON_TAG}` : d.deal_url),
       loc: d.location,
       dest: d.destination,
       asin: d.asin,
@@ -512,7 +513,7 @@ app.post('/api/scrape', requireApiKey, async (req, res) => {
       let asin = null;
       if (asinMatch) {
         asin = asinMatch[1];
-        dealUrl = `https://www.amazon.com/dp/${asin}`;
+        dealUrl = `https://www.amazon.com/dp/${asin}?tag=${AMAZON_TAG}`;
       } else if (storeUrlMatch && storeUrlMatch[1] !== 'slickdeals.net') {
         dealUrl = `https://www.${storeUrlMatch[1]}`;
       }
