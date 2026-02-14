@@ -526,7 +526,7 @@ app.post('/api/scrape', requireApiKey, async (req, res) => {
         await pool.query(
           `INSERT INTO deals (title, category, store, store_color, price, original_price, discount_percent, source, source_deal_id, deal_url, image_url, asin, votes, tags, shipping_info, country, is_active, scraped_at)
            VALUES ($1, 'retail', $2, $3, $4, $5, $6, 'slickdeals', $7, $8, $9, $10, $11, $12, $13, 'US', true, NOW())
-           ON CONFLICT (source, source_deal_id) DO UPDATE SET price=EXCLUDED.price, image_url=COALESCE(EXCLUDED.image_url, deals.image_url), deal_url=COALESCE(EXCLUDED.deal_url, deals.deal_url), asin=COALESCE(EXCLUDED.asin, deals.asin), scraped_at=NOW(), is_active=true`,
+           ON CONFLICT (source, source_deal_id) DO UPDATE SET price=EXCLUDED.price, image_url=COALESCE(EXCLUDED.image_url, deals.image_url), deal_url=EXCLUDED.deal_url, asin=COALESCE(EXCLUDED.asin, deals.asin), scraped_at=NOW(), is_active=true`,
           [title.substring(0, 200), store, SC[store] || '#86868b', price, origPrice, discount, sid, dealUrl, imgMatch ? imgMatch[1] : null, asin, Math.floor(Math.random() * 400) + 50, discount >= 35 ? '{hot}' : '{}', store === 'Amazon' ? 'Free Prime' : 'Free Ship']
         );
         results.upserted++;
