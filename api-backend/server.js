@@ -510,9 +510,10 @@ app.get('/api/hotels/search', async (req, res) => {
     // Take top 20 hotels
     const hotelIds = htlData.data.slice(0, 20).map(h => h.hotelId);
 
-    // 3. Get prices/offers
-    const ci = checkin || new Date(Date.now() + 86400000).toISOString().split('T')[0];
-    const co = checkout || new Date(Date.now() + 2 * 86400000).toISOString().split('T')[0];
+    // 3. Get prices/offers — ensure checkout > checkin
+    let ci = checkin || new Date(Date.now() + 86400000).toISOString().split('T')[0];
+    let co = checkout || new Date(Date.now() + 2 * 86400000).toISOString().split('T')[0];
+    if (co <= ci) co = new Date(new Date(ci).getTime() + 86400000).toISOString().split('T')[0];
     const offResp = await fetch(`${AMADEUS_BASE}/v3/shopping/hotel-offers?hotelIds=${hotelIds.join(',')}&adults=${adults}&checkInDate=${ci}&checkOutDate=${co}&currency=USD&bestRateOnly=true`, { headers: auth });
     const offData = await offResp.json();
 
@@ -529,14 +530,14 @@ app.get('/api/hotels/search', async (req, res) => {
         total,
         perNight: Math.round(total / nights),
         currency: offer?.price?.currency || 'USD',
-        room: offer?.room?.description?.text || 'Standard Room',
+        room: (offer?.room?.description?.text || 'Standard Room').replace(/\n/g, ' · ').substring(0, 80),
         nights,
         checkIn: ci,
         checkOut: co
       };
     }).filter(h => h.total > 0).sort((a, b) => a.perNight - b.perNight);
 
-    res.json({ hotels, city: cityCode });
+    res.json({ hotels, city: cityCode, cityName: cityData.data[0].name || city });
   } catch (err) {
     console.error('Hotel search error:', err.message);
     res.status(500).json({ error: 'search_failed', message: err.message });
