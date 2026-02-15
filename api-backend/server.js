@@ -770,6 +770,24 @@ app.listen(PORT, () => {
   console.log(`SnagDeals API running on port ${PORT}`);
   console.log(`  Health: http://localhost:${PORT}/api/health`);
   console.log(`  Deals:  http://localhost:${PORT}/api/deals?country=US&sort=popular`);
+
+  // Auto-scrape: run immediately on startup, then every 30 minutes
+  const runScrape = () => {
+    console.log(`[Auto-Scrape] Triggering scrape at ${new Date().toISOString()}`);
+    fetch(`http://localhost:${PORT}/api/scrape`, {
+      method: 'POST',
+      headers: { 'x-api-key': API_SECRET, 'Content-Type': 'application/json' }
+    }).then(r => r.json()).then(d => {
+      console.log(`[Auto-Scrape] Done: ${d.totalDeals} deals found, ${d.upserted} upserted`);
+    }).catch(err => {
+      console.error(`[Auto-Scrape] Error: ${err.message}`);
+    });
+  };
+  // Wait 10s after startup for DB connection to be ready, then scrape
+  setTimeout(runScrape, 10000);
+  // Then every 30 minutes
+  setInterval(runScrape, 30 * 60 * 1000);
+  console.log('  Auto-scrape: every 30 minutes');
 });
 
 module.exports = app;
